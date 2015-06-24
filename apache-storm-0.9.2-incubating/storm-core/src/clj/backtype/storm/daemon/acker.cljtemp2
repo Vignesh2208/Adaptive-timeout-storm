@@ -1,0 +1,443 @@
+;; Licensed to the Apache Software Foundation (ASF) under one
+;; or more contributor license agreements.  See the NOTICE file
+;; distributed with this work for additional information
+;; regarding copyright ownership.  The ASF licenses this file
+;; to you under the Apache License, Version 2.0 (the
+;; "License"); you may not use this file except in compliance
+;; with the License.  You may obtain a copy of the License at
+;;
+;; http://www.apache.org/licenses/LICENSE-2.0
+;;
+;; Unless required by applicable law or agreed to in writing, software
+;; distributed under the License is distributed on an "AS IS" BASIS,
+;; WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+;; See the License for the specific language governing permissions and
+;; limitations under the License.
+(ns backtype.storm.daemon.acker
+  (:import [backtype.storm.task OutputCollector TopologyContext IBolt])
+  (:import [backtype.storm.tuple Tuple Fields])
+  (:import [backtype.storm.utils RotatingMap MutableObject MutableLong])
+  (:import [java.util List HashMap Map ArrayList Random])
+  (:import [backtype.storm.utils End_to_End Queueing_model])
+  (:import [backtype.storm Config])
+  (:import [backtype.storm Constants])
+  (:use [backtype.storm config util log])
+  (:gen-class
+   :init init
+   :implements [backtype.storm.task.IBolt]
+   :constructors {[] []}
+   :state state ))
+
+(def ACKER-COMPONENT-ID "__acker")
+(def ACKER-INIT-STREAM-ID "__ack_init")
+(def ACKER-ACK-STREAM-ID "__ack_ack")
+(def ACKER-FAIL-STREAM-ID "__ack_fail")
+(def ACKER-TIMEOUT-DISPATCH-STREAM-ID "__ack_time_out")
+
+
+(def acker-tuple_action "/app/home/storm/log_acker_action.txt")
+
+
+(defn debug-message [filename message]
+  (spit filename message :append true)
+)
+
+
+
+(defn is-the-adaptive-timeout-enabled [^Map conf]
+  (if (.containsKey conf Config/ADAPTIVE_TIMEOUT_ENABLED) 
+    (if (.get conf Config/ADAPTIVE_TIMEOUT_ENABLED)
+      true
+      false
+    )
+    false
+  )
+)  
+
+(defn obtain-adaptive-timeout-mode [^Map conf]
+  (if (is-the-adaptive-timeout-enabled conf)
+   (.get conf Config/ADAPTIVE_TIMEOUT_MODE)
+   (str "None")
+  )
+  
+)
+
+(defn is-fault-injector-enabled [^Map conf]
+  (if (.containsKey conf Config/FAULT_INJECTOR_ENABLED) 
+    (if (.get conf Config/FAULT_INJECTOR_ENABLED)
+      true
+      false
+    )
+    false
+  )
+)  
+(defn return-msg-drop-probability [^Map conf]
+  (if (is-fault-injector-enabled conf)
+   (.get conf Config/MSG_DROP_PROBABILITY)
+   (int 0)
+  )
+  
+)
+
+(defn should-it-be-dropped [msg-drop-probability ^Random rand]
+  (if (= msg-drop-probability (int 0))
+    (do
+      
+      false
+    )
+    (do
+          (let [rand-number-max (int msg-drop-probability)
+                gen-rand-number (.nextInt rand rand-number-max)
+                
+              ] 
+               
+               (if (not (= gen-rand-number (int (- rand-number-max 1))))
+                  (do
+                      
+                      false
+                   )
+                  (do
+                      
+                      true
+                  )
+               )
+          )
+   )
+  
+  )
+)
+
+
+
+
+(def locking-object (Object.))
+;;KIRAN
+(def MAX_TASK_RATE_LIST_SIZE 1)
+
+(defn- update-ack [curr-entry val]
+  (let [old (get curr-entry :val 0)]
+    
+    (assoc curr-entry :val (bit-xor old val))
+    ;; 
+    ))
+
+(defn- acker-emit-direct [^OutputCollector collector ^Integer task ^String stream ^List values]
+  (.emitDirect collector task stream values)
+  )
+
+(defn- update-task-rate-map [^HashMap task-rate-map lambda mu queuing-delay inter-arrival-time task-id ^HashMap task-count-map]
+ (if (.containsKey task-rate-map (str task-id))
+ (do
+  (let [ new-entry (java.util.ArrayList.) 
+        ^ArrayList base-list (.get task-rate-map (str task-id))
+       ]
+   (.add new-entry lambda )
+   (.add new-entry mu )
+   (.add new-entry queuing-delay )
+   (.add new-entry inter-arrival-time )
+   (if (< (.size base-list) MAX_TASK_RATE_LIST_SIZE )
+     (do
+       (.add base-list new-entry)
+       (.put task-count-map (str task-id) (+ (.get task-count-map (str task-id)) 1))
+       
+     )
+     (do
+       (let [index (rem (.get task-count-map (str task-id)) (int MAX_TASK_RATE_LIST_SIZE))]   
+         (.set base-list index new-entry)
+         (.put task-count-map (str task-id) (+ (int (.get task-count-map (str task-id))) 1))
+       )
+     )
+   )
+  )
+ )
+ (do
+  (let [new-entry (java.util.ArrayList.)
+       new-base-list (java.util.ArrayList.)
+       ]
+   (.add new-entry lambda )
+   (.add new-entry mu )
+   (.add new-entry queuing-delay )
+   (.add new-entry inter-arrival-time )
+   (.add new-base-list new-entry)
+   (.put task-rate-map (str task-id) new-base-list)
+   (.put task-count-map (str task-id) (int 1))
+       
+  )
+      
+ )
+    
+ )
+ 
+)
+
+
+(defn- reset-task-rate-map [^HashMap task-rate-map]
+ (fast-map-iter [[task-id data] task-rate-map]
+   (let [new-base-list (java.util.ArrayList.)]
+    (.put task-rate-map (str task-id) new-base-list) 
+   )
+ )
+)
+
+(defn- reset-task-timestamp-map [^HashMap task-timestamp-map]
+ (fast-map-iter [[task-id data] task-timestamp-map]
+   (let [new-base-list (java.util.ArrayList.)]
+    (.put task-timestamp-map (str task-id) new-base-list) 
+   )
+ )
+)
+
+(defn- update-task-timestamp-map [^HashMap task-timestamp-map tuple-id start-timestamp stop-timestamp task-id ^HashMap task-count-map]
+ (if (.containsKey task-timestamp-map (str task-id))
+ (do
+  (let [ new-entry (java.util.ArrayList.) 
+        ^ArrayList base-list (.get task-timestamp-map (str task-id))
+       ]
+   (.add new-entry tuple-id )
+   (.add new-entry start-timestamp )
+   (.add new-entry stop-timestamp )
+   (if (< (.size base-list) MAX_TASK_RATE_LIST_SIZE )
+     (do
+       (.add base-list new-entry)
+             
+     )
+     (do
+       (let [index (rem (- (.get task-count-map (str task-id)) 1) (int MAX_TASK_RATE_LIST_SIZE))]   
+         (.set base-list index new-entry)
+         
+       )
+     )
+   )
+  )
+ )
+ (do
+  (let [new-entry (java.util.ArrayList.)
+       new-base-list (java.util.ArrayList.)
+       ]
+   (.add new-entry tuple-id )
+   (.add new-entry start-timestamp)
+   (.add new-entry stop-timestamp)
+   (.add new-base-list new-entry)
+   (.put task-timestamp-map (str task-id) new-base-list)
+   
+       
+  )
+      
+ )
+    
+ )
+ 
+)
+
+
+
+(defn- reset-task-count-map [^HashMap task-count-map]
+ (fast-map-iter [[task-id data] task-count-map]
+   (.put task-count-map (str task-id) 0) 
+  )
+)
+
+(defn mk-acker-bolt []
+  (let [output-collector (MutableObject.)
+        pending (MutableObject.)
+        task-rate-map (java.util.HashMap.)
+        task-count-map (java.util.HashMap.)
+        task-timestamp-map (java.util.HashMap.)
+        spout_task_list (java.util.ArrayList.)
+        prev-time-out (MutableLong. 30)
+        msg-drop-probability (MutableObject.)
+        task-id  (MutableObject.)
+        rand_2 (Random.)
+        adaptive-timeout-mode (MutableObject.) 
+        queuing-model (MutableObject.)
+        timeout-value (MutableObject.(int 100))
+        
+        
+        ]
+    (reify IBolt
+      (^void prepare [this ^Map storm-conf ^TopologyContext context ^OutputCollector collector]
+               (.setObject output-collector collector)
+               (.setObject pending (RotatingMap. 2))
+               (.setObject task-id (int (.getThisTaskId context)))
+               (println "Acker task-id is " (str (.getObject task-id)))
+               ;;;  FAULT-INJECTOR
+               (.setObject msg-drop-probability (return-msg-drop-probability storm-conf))
+               (.setObject adaptive-timeout-mode (obtain-adaptive-timeout-mode storm-conf))
+               (.setObject queuing-model (Queueing_model. context (obtain-adaptive-timeout-mode storm-conf)))
+               ;;;
+               
+               )
+      (^void execute [this ^Tuple tuple]
+             (let [^RotatingMap pending (.getObject pending)
+                   stream-id (.getSourceStreamId tuple)]
+               
+               
+               (if (= stream-id Constants/SYSTEM_TICK_STREAM_ID)
+                 (do
+                   
+                   ;;(println "At Acker task received tick tuple" )
+                   (let [
+                         queue-model-obj (.getObject queuing-model)
+                         ;;new-timeout-value (compute-timeout task-rate-map (.getObject adaptive-timeout-mode))
+                         ;;new-timeout-value (.getObject timeout-value)
+                         ]
+                     
+                                         
+                               
+                     
+                     ;;Send out the computed new timeout value to spouts only if the QUEUING MODEL based timeout mechanism is enabled
+                     (if (boolean (re-find #"QUEUEING MODEL" (.getObject adaptive-timeout-mode))) ;; if QUEUING MODEL substring is present in mode
+                       ;;;KIRAN
+                       (do
+                         ;;(try
+                         ;;(.set_task_rate_map queue-model-obj task-rate-map)
+                         ;;(.set_task_timestamp_map queue-model-obj task-timestamp-map)
+                         ;;(.setObject timeout-value (.on_Tick_tuple queue-model-obj))
+                         (.setObject timeout-value (.on_Tick_tuple queue-model-obj task-rate-map))
+                         ;;(catch Exception e 
+                         ;;  (println "Exception Caught " (.getMessage e))
+                           
+                         ;;  ))
+                         
+                         
+                         (fast-list-iter [task-id spout_task_list]
+                             (acker-emit-direct   (.getObject output-collector)
+                                                  task-id
+                                                  ACKER-TIMEOUT-DISPATCH-STREAM-ID
+                                                  [(.getObject timeout-value)]
+                                                  )           
+                          )
+                      )
+                      ;; else
+                      (if (= (.getObject adaptive-timeout-mode) "END_TO_END")
+                        (.setObject timeout-value (int 100))
+                        (.setObject timeout-value (int 30))
+                        
+                      )
+                     )
+                     
+                       
+                      (with-open [w (clojure.java.io/writer (str Constants/TIMEOUT_FILE_BASE_DIR ACKER-COMPONENT-ID "-" (str (.getObject task-id)) ".txt"))]
+                      (.write w (str (.getObject timeout-value))))
+                      
+                      (reset-task-rate-map task-rate-map)
+                      (reset-task-count-map task-count-map) 
+                      (reset-task-timestamp-map task-timestamp-map)
+                   )
+                 )
+                 (let [id (.getValue tuple 0)
+                       ^OutputCollector output-collector (.getObject output-collector)
+                       curr (.get pending id)
+                       curr (condp = stream-id
+                                ACKER-INIT-STREAM-ID (do
+                                                     (.add spout_task_list (.getSourceTask tuple))
+                                                       
+                                                     (-> curr
+                                                         (update-ack (.getValue tuple 1))
+                                                         (assoc :spout-task (.getValue tuple 2)))
+                                                     )
+                                ACKER-ACK-STREAM-ID (do
+                                                     ;;(println " At acker : Source Task " (.getSourceTask tuple) " Source lambda : " (.getValue tuple 2) " Source mu : " (.getValue tuple 3))
+                                                     (update-task-rate-map task-rate-map (.getValue tuple 2) (.getValue tuple 3) (.getValue tuple 7) (.getValue tuple 6) (.getSourceTask tuple) task-count-map)
+                                                     (update-task-timestamp-map task-timestamp-map (.getValue tuple 0) (.getValue tuple 4) (.getValue tuple 5) (.getSourceTask tuple) task-count-map)
+                                                     ;;(println "Interarrival-time, Queuing-delay at Acker for source task : " (.getSourceTask tuple) " = " (.getValue tuple 6) (.getValue tuple 7))
+                                                      
+                                                     (debug-message acker-tuple_action (str " At acker : Source Task " (.getSourceTask tuple) " Source lambda : " (.getValue tuple 2) " Source mu : " (.getValue tuple 3) "\n"))
+                                                     (update-ack curr (.getValue tuple 1))
+                                                     
+                                                    )
+                                ACKER-FAIL-STREAM-ID (do
+                                                      (update-task-rate-map task-rate-map (.getValue tuple 1) (.getValue tuple 2) (.getValue tuple 6) (.getValue tuple 5) (.getSourceTask tuple) task-count-map)
+                                                      (update-task-timestamp-map task-timestamp-map (.getValue tuple 0) (.getValue tuple 3) (.getValue tuple 4) (.getSourceTask tuple) task-count-map)
+                                                      ;;(println "Interarrival-time, Queuing-delay at Acker for source task : " (.getSourceTask tuple) " = " (.getValue tuple 5) (.getValue tuple 6))
+                                                      (assoc curr :failed true)
+                                                      )
+                                                     
+                               Constants/SYSTEM_TIMEOUT_STREAM_ID (do 
+                                                                   
+                                                                   ;;(println "Timeout expired tuple received at " ACKER-COMPONENT-ID );;"-" (str (.getObject task-id)))
+                                                                   (.rotate pending)
+                                                                  )
+                               Constants/SPOUT_COMPUTED_TIMEOUT_STREAM_ID (do
+                                                                            ;;(println "Acker task : Received a spout-computed timeout-value of " (.getValue tuple 0))
+                                                                            (let [recv-timeout-value (.getValue tuple 0)]
+                                                                                 (if (>=  recv-timeout-value (.get prev-time-out))
+                                                                                     (do
+                                                                                     (println "Acker task : Received value is greater. Assigning new timeout value ..")
+                                                                                     (.set prev-time-out recv-timeout-value)
+                                                                                     (with-open [w (clojure.java.io/writer (str Constants/TIMEOUT_FILE_BASE_DIR ACKER-COMPONENT-ID "-" (str (.getObject task-id)) ".txt"))]
+                                                                                       (.write w (str recv-timeout-value)))
+                                                                                     
+                                                                                     )
+                                                                                 )
+                                                                            )
+                                                                          )
+                                )
+                                ]
+                                
+                   (.put pending id curr)
+                   (when (and curr (:spout-task curr))
+                     (cond (= 0 (:val curr))
+                           (do
+                             (.remove pending id)
+                             (debug-message acker-tuple_action "Acker should it be dropped \n")
+                             (try
+                               (if (not (should-it-be-dropped (.getObject msg-drop-probability) rand_2))
+                                 (acker-emit-direct output-collector
+                                                    (:spout-task curr)
+                                                    ACKER-ACK-STREAM-ID
+                                                    [id]
+                                                    )
+                               )
+                             (catch Exception e (str "Caught exception " (.getMessage e))))
+                             (debug-message acker-tuple_action "Acker decided\n")
+                             
+                             )
+                           (:failed curr)
+                           (do
+                             (.remove pending id)
+                             (debug-message acker-tuple_action "Acker should it be dropped \n")
+                             (try
+                               (if (not (should-it-be-dropped (.getObject msg-drop-probability) rand_2))
+                                 (acker-emit-direct output-collector
+                                                    (:spout-task curr)
+                                                    ACKER-FAIL-STREAM-ID
+                                                    [id]
+                                                    )
+                               )
+                             (catch Exception e (str "Caught exception " (.getMessage e))))
+                             (debug-message acker-tuple_action "Acker decided\n")
+                             )
+                           ))
+                   
+                   (.ack output-collector tuple)
+                   )
+                 
+                 
+                 )
+               
+               ))
+      (^void cleanup [this]
+        (println "Acker cleanup called")
+        )
+      )))
+
+(defn -init []
+  [[] (container)])
+
+(defn -prepare [this conf context collector]
+  (let [^IBolt ret (mk-acker-bolt)]
+    (container-set! (.state ^backtype.storm.daemon.acker this) ret)
+    (.prepare ret conf context collector)
+    ))
+
+(defn -execute [this tuple]
+  (let [^IBolt delegate (container-get (.state ^backtype.storm.daemon.acker this))]
+    (.execute delegate tuple)
+    ))
+
+(defn -cleanup [this]
+  (let [^IBolt delegate (container-get (.state ^backtype.storm.daemon.acker this))]
+    (.cleanup delegate)
+    ))
+
