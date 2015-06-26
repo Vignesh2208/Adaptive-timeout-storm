@@ -47,6 +47,8 @@ public class Queueing_model {
 	 * Timeout value file : (contains appended timeout values for evaluation purposes ) : TIMEOUT_BASE_DIR/<(Component_ID)-(Task_ID)>.txt
 	 *  
 	 */
+	int mm1_timeout;
+	int ht_timeout;
 	
 	Map<Integer, String> Task_to_Component_map = new HashMap<Integer,String>();
 	Set<String> ComponentIds = new HashSet<String>();
@@ -170,6 +172,8 @@ public class Queueing_model {
 		Task_to_Component_map = context. getTaskToComponent();
 		ComponentIds = context.getComponentIds();
 		this.mode = mode;
+		this.mm1_timeout = Constants.MAX_TIMEOUT;
+		this.ht_timeout =  Constants.MAX_TIMEOUT;
 		
 		String streamId;
 		
@@ -324,64 +328,26 @@ public class Queueing_model {
 
 		// Do the timeout computation here with the task rate map and the longest path/heaviest_path and Task to component map.
 		
-		HashMap<String,Float> Comp_id_to_weight = new HashMap<String,Float>();		
+				
 		System.out.println("Acker: Called on_Tick_Tuple");
-		int i = 0;
-		float avg_lambda = (float)0.0;
-		int no_of_entries = 0;
-		int ht_timeout = 0;
-		for (String componentId : ComponentIds) {
-			Comp_id_to_weight.put(componentId,(float)0.0);
-		}
 		
 		if(task_rate_map != null){
-	
-		// The average lambda is estimated for each component. It is set as the component weight. Then this is used to estimate the heaviest
-		// path or the most utilized path. Sum of the average lambda of each task in the component = weight of component.
-			
-		for (Map.Entry<String,ArrayList<ArrayList>> entry : task_rate_map.entrySet())
-		{
-			
-			no_of_entries = 0;
-			avg_lambda = (float)0.0;
-			for(i=0; i<entry.getValue().size(); i++ ){
-				List<Float> lambda_mu_tuple = new ArrayList();
-				lambda_mu_tuple = entry.getValue().get(i);
-				avg_lambda = avg_lambda + lambda_mu_tuple.get(0);
-				no_of_entries++;
-			}
-			avg_lambda = avg_lambda/(no_of_entries);
-			String comp_id = Task_to_Component_map.get(Integer.parseInt(entry.getKey()));
-			if(comp_id != null && !comp_id.isEmpty()){
-				Comp_id_to_weight.put(comp_id,Comp_id_to_weight.get(comp_id) + avg_lambda); 
-			}
-			
-		    
-	    	
-	    	
-		}
-		
-		set_node_weights(Comp_id_to_weight);
-		find_heaviest_weighted_path();
 			
 			if(mode.equals("QUEUEING MODEL Heavy Traffic")){
-				
+
 				ht_timeout = compute_heavy_traffic_approximation();
+				return ht_timeout;
 			}
 			else{
 				
-				if(mode.equals("QUEUEING MODEL M/M/1")){
-					ht_timeout = 100;
+				if(mode.equals("QUEUEING MODEL MM1")){
+					MM1_approximation();
+					return this.mm1_timeout;
 				}
 				else{
-					ht_timeout = 100;
+					return Constants.MAX_TIMEOUT;
 				}
 			}
-			
-			return ht_timeout;
-			
-			
-			
 			
 			
 		}
@@ -390,7 +356,7 @@ public class Queueing_model {
 		}
 		
 		
-		return 100; //Default timeout value 
+		return Constants.MAX_TIMEOUT; //Default timeout value 
 	}
 	
 	
@@ -424,7 +390,7 @@ public class Queueing_model {
 						}
 					}
 					if(max != (float)-1.0){
-						graph.get(comp_id).set_heaviest_path(graph.get(comp_id).weight + max + (float)1.0);
+						graph.get(comp_id).set_heaviest_path(graph.get(comp_id).weight + max + (float)1.0 + Constants.NETWORK_DELAY);
 						graph.get(comp_id).set_prev_node_in_longest_path(prev_node);
 						
 					}
@@ -436,6 +402,9 @@ public class Queueing_model {
 					
 					
 				}// end of for
+				if(mode.equals("QUEUEING MODEL MM1"))
+					this.mm1_timeout = (int)max_wt_value;
+				
 				heaviest_path = new ArrayList();
 				while(!sink_in_hp.isEmpty()){
 					heaviest_path.add(sink_in_hp);
@@ -470,6 +439,7 @@ public class Queueing_model {
 	}
 	
 	public int compute_heavy_traffic_approximation(){
+		
 		String task_Id;
 		ArrayList<Long> interarrival_times = new ArrayList<Long>();
 		ArrayList<Long> service_times = new ArrayList<Long>();
@@ -483,14 +453,47 @@ public class Queueing_model {
 		String comp_id;
 		String file_path = Constants.TIMEOUT_FILE_BASE_DIR + "Service_Times/";
 		String inter_path = Constants.TIMEOUT_FILE_BASE_DIR + "Interarrival_Times/";
-	
+		int i = 0;
+		float avg_lambda = (float)0.0;
+		int no_of_entries = 0;
+		HashMap<String,Float> Comp_id_to_weight = new HashMap<String,Float>();
+		
+		for (String componentId : ComponentIds) {
+			Comp_id_to_weight.put(componentId,(float)0.0);
+		}
+		
 		if(task_rate_map != null){
+	
+			// The average lambda is estimated for each component. It is set as the component weight. Then this is used to estimate the heaviest
+			//path or the most utilized path. Sum of the average lambda of each task in the component = weight of component.
+			
+			for (Map.Entry<String,ArrayList<ArrayList>> entry : task_rate_map.entrySet())
+			{
+			
+				no_of_entries = 0;
+				avg_lambda = (float)0.0;
+				for(i=0; i<entry.getValue().size(); i++ ){
+					List<Float> lambda_mu_tuple = new ArrayList();
+					lambda_mu_tuple = entry.getValue().get(i);
+					avg_lambda = avg_lambda + lambda_mu_tuple.get(0);
+					no_of_entries++;
+				}
+				avg_lambda = avg_lambda/(no_of_entries);
+				comp_id = Task_to_Component_map.get(Integer.parseInt(entry.getKey()));
+				if(comp_id != null && !comp_id.isEmpty()){
+					Comp_id_to_weight.put(comp_id,Comp_id_to_weight.get(comp_id) + avg_lambda); 
+				}
+			}
+		
+			set_node_weights(Comp_id_to_weight);
+			find_heaviest_weighted_path();
+			
 			for (Map.Entry<String,ArrayList<ArrayList>> entry : task_rate_map.entrySet())
 			{
 			    task_Id = entry.getKey();
 			    comp_id = Task_to_Component_map.get(Integer.parseInt(task_Id));
 		    	
-			    for(int i = 0; i < entry.getValue().size(); i++){
+			    for(i = 0; i < entry.getValue().size(); i++){
 			    	interarrival_times.add((Long)entry.getValue().get(i).get(3));
 			    	
 			    	service_times.add((Long)entry.getValue().get(i).get(2));
@@ -548,15 +551,15 @@ public class Queueing_model {
 			    diff_list = new ArrayList<Long>();
 			    
 			    
-		}
+		 }
 		
-		for (Map.Entry<String,Double> entry : max_timeout.entrySet())
-		{
+		 for (Map.Entry<String,Double> entry : max_timeout.entrySet())
+		 {
 			
 			if(heaviest_path.contains(entry.getKey())){
 				total_timeout += entry.getValue();
 			}
-		}
+		 }
 		
 		
 		System.out.println("Total Heavy traffic approx timeout = " + total_timeout);
@@ -581,17 +584,67 @@ public class Queueing_model {
   		}
   		*/
   		
-		if (computed_timeout > 0 && computed_timeout < 100)
+		if (computed_timeout > 0 && computed_timeout < Constants.MAX_TIMEOUT)
 			return computed_timeout;
 		else 
-			if(computed_timeout > 100){
-				return 100;
+			if(computed_timeout > Constants.MAX_TIMEOUT){
+				return Constants.MAX_TIMEOUT;
 			}
 			else
 				return 1;
 
 		
 			
+	}
+	
+	public void MM1_approximation(){
+		
+		
+		int task_Id;
+		
+		float lambda;
+		float mu;
+		float sojourn_percentile;
+		
+		
+		System.out.println("Started MM1 approximation");
+		
+		if(task_rate_map != null){
+			for (Map.Entry<String,ArrayList<ArrayList>> entry : task_rate_map.entrySet())
+			{
+				task_Id = Integer.parseInt(entry.getKey());
+				List<Float> lambda_mu_tuple = new ArrayList();
+				lambda_mu_tuple = entry.getValue().get(0);
+				lambda = ((float)lambda_mu_tuple.get(0));///(float)1000000);//incoming traffic
+				mu = ((float)lambda_mu_tuple.get(1));///(float)1000000);//service rate
+				if(mu <= lambda){
+					this.mm1_timeout =  Constants.MAX_TIMEOUT;
+					System.out.println("MM1 timeout = " + mm1_timeout);
+					return;
+				}
+				sojourn_percentile = (float) Math.log(1/(1-Constants.TIMEOUT_PERCENTILE ))/(mu - lambda);
+				if(sojourn_percentile >= Constants.MAX_TIMEOUT){
+					this.mm1_timeout =  Constants.MAX_TIMEOUT;
+					System.out.println("MM1 timeout = " + mm1_timeout);
+					return;
+				}
+				graph.get(Task_to_Component_map.get(task_Id)).set_weight(Math.max(sojourn_percentile, graph.get(Task_to_Component_map.get(task_Id)).weight));
+	    	
+			}
+			
+			System.out.println("Done this");
+			find_heaviest_weighted_path();
+			if(mm1_timeout < 1)
+				this.mm1_timeout = 1;
+			if(mm1_timeout > Constants.MAX_TIMEOUT)
+				this.mm1_timeout = Constants.MAX_TIMEOUT;
+			
+		}
+		else{
+			this.mm1_timeout = Constants.MAX_TIMEOUT;
+		}
+		
+		System.out.println("MM1 timeout = " + mm1_timeout);
 	}
 	
 	

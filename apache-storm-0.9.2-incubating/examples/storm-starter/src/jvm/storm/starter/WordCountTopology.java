@@ -74,7 +74,7 @@ public class WordCountTopology {
     String topology_info = "default-info";
     int enable_adaptive_timeout = 1;
     int enable_fault_injector = 0;
-    String Adaptive_Timeout_mode = "QUEUEING MODEL Heavy Traffic";
+    String Adaptive_Timeout_mode = "QUEUEING MODEL MM1";
     String topology_name = "Word count topology ";
     
     /*
