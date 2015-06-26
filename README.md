@@ -4,7 +4,7 @@ Few things to note :
 
 In "storm-core/src/jvm/backtype/storm/Constants.java"
 
-* Replace  TIMEOUT_FILE_BASE_DIR (original value "/home/vignesh/Clojure_projects/") to whatever path you want. The timeout files (which are read by the timeout-timer) will be created in this path and automatically deleted after the topology is shut-down.
+* Replace  TIMEOUT_FILE_BASE_DIR (original value "/app/home/storm/") to whatever path you want. The timeout files (which are read by the timeout-timer) will be created in this path and automatically deleted after the topology is shut-down.
 
 * Compile the source code using 
 
