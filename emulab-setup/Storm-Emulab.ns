@@ -1,0 +1,30 @@
+set ns [new Simulator]
+source tb_compat.tcl
+
+# Create the nodes
+set nimbus [$ns node]
+set slave1 [$ns node]
+set slave2 [$ns node]
+
+# Configure the network
+set lan0 [$ns make-lan "$nimbus $slave1 $slave2" 100Mb 0ms]
+
+# For adding link loss for future experiments
+tb-set-lan-loss $lan0 0
+
+# Set static IP addresses
+tb-set-ip-lan $nimbus $lan0 10.0.0.1
+tb-set-ip-lan $slave1 $lan0 10.0.0.2
+tb-set-ip-lan $slave2 $lan0 10.0.0.3
+
+# Specify the OS for the nodes
+tb-set-node-os $nimbus storm_node_0.9.2
+tb-set-node-os $slave1 storm_node_0.9.2
+tb-set-node-os $slave2 storm_node_0.9.2
+
+# Specify what role each node plays
+tb-set-node-startcmd $nimbus "/placeholder/path/to/startnimbus.sh >& /tmp/nimbus.log"
+tb-set-node-startcmd $slave1 "/placeholder/path/to/startworker.sh >& /tmp/worker.log"
+tb-set-node-startcmd $slave1 "/placeholder/path/to/startworker.sh >& /tmp/worker.log"
+
+$ns run
