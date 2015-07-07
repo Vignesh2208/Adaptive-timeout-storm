@@ -1,0 +1,144 @@
+Complete set of Commands to set up supervisor/nimbus on an GCE instance:
+------------------------------------------------------------------------
+
+Install Java :
+--------------
+sudo apt-get update
+sudo apt-get install openjdk-7-jdk
+export JAVA_HOME=/usr/lib/jvm/java/java-1.7.0-openjdk-amd64/jre
+sudo apt-get install unzip
+
+Install ZeroMq :
+----------------
+
+Install dependencies
+--------------------
+sudo apt-get install libtool
+sudo apt-get install pkg-config
+sudo apt-get install build-essential
+sudo apt-get install autoconf
+sudo apt-get install uuid-dev
+
+
+Transfer Source Zip file to instance :
+		
+(from local machine)$ gcloud compute copy-files ~/Downloads/zeromq-3.2.5.tar.gz nimbus:/tmp/zeromp-3.2.5.tar.gz --zone us-central1-a
+
+tar xvzf zeromq-3.2.5.tar.gz
+cd zeromq-3.2.5/
+sudo ./configure
+sudo make install
+sudo ldconfig
+
+Install Jzmq :
+--------------
+
+Transfer Source zip file to instance :
+
+(from local machine)$ gcloud compute copy-files ~/Downloads/jzmq-master.tar.gz nimbus:/tmp/jzmq-master.tar.gz --zone us-central1-a
+
+tar xvzf jzmq-master.tar.gz
+cd jzmq-master/
+sudo ./autogen.sh
+sudo ./configure
+sudo make
+sudo make install
+sudo ldconfig
+
+Install numpy and scipy :
+-------------------------
+
+sudo apt-get install python-numpy python-scipy
+sudo mkdir -p /app/home/storm
+sudo mkdir -p /app/storm
+
+
+Install storm distribution (in each machine):
+---------------------------------------------
+
+Create dedicated storm user : (optional)
+
+sudo groupadd -g 53001 storm
+sudo mkdir -p /app/home/storm
+sudo useradd -u 53001 -g 53001 -d /app/home/storm -s /bin/bash storm -c "Storm service account"
+sudo chmod 700 /app/home/storm
+sudo chage -I -1 -E -1 -m -1 -M -1 -W -1 -E -1 storm
+
+sudo mkdir -p /app/storm
+sudo chown -R storm:storm /app/storm
+sudo chmod 750 /app/storm
+
+
+Transfer the zip file to the instance (these steps have to be repeated each time the storm source code is changed)
+
+(from local machine)$ gcloud compute copy-files ~/Desktop/CS-525/apache-storm-0.9.2-incubating/storm-dist/binary/target/apache-storm-0.9.2-incubating.zip nimbus:/tmp/apache-storm-incubating.zip --zone us-central1-a
+
+Next steps :
+
+cd /usr/local/
+sudo unzip /tmp/apache-storm-0.9.2-incubating.zip
+sudo chown -R storm:storm apache-storm-0.9.2-incubating
+sudo ln -s apache-storm-0.9.2-incubating storm
+
+
+
+Setup the configuration file : (/usr/local/storm/config/storm.yaml) - in each machine
+-------------------------------------------------------------------------------------
+storm.zookeeper.servers:
+- "zookeeper"
+
+nimbus.host: "nimbus"
+nimbus.childopts: "-Xmx1024m -Djava.net.preferIPv4Stack=true"
+
+ui.childopts: "-Xmx768m -Djava.net.preferIPv4Stack=true"
+
+supervisor.childopts: "-Djava.net.preferIPv4Stack=true"
+worker.childopts: "-Xmx768m -Djava.net.preferIPv4Stack=true"
+
+storm.local.dir: "/app/storm"
+
+java.library.path: "/usr/local/lib"
+
+
+Start nimbus :
+--------------
+
+#switch to storm user
+
+sudo su - storm 
+cd /usr/local/storm
+/bin/storm nimbus
+
+
+Start supervisors :
+------------------
+
+#switch to storm user
+
+sudo su - storm 
+cd /usr/local/storm
+/bin/storm supervisor
+
+Start nimbus UI: (in nimbus instance)
+----------------
+
+#switch to storm user
+
+sudo su - storm 
+cd /usr/local/storm
+/bin/storm ui
+
+Start Zookeeper (in zookeeper instance)
+---------------------------------------
+
+cd /home/ubuntu/zookeeper-3.4.6
+bin/zkServer.sh start
+
+
+Stop Zookeeper (in zookeeper instance)
+---------------------------------------
+
+cd /home/ubuntu/zookeeper-3.4.6
+bin/zkServer.sh stop
+
+* Create a /etc/hosts file (in local machine) for submitting topologies. Set the External IP addresses of nimbus, zookeeper, slave-1 and slave-2 instances.

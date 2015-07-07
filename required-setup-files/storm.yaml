@@ -1,0 +1,43 @@
+#storm.zookeeper.servers:
+
+#     - "localhost"
+
+#storm.zookeeper.port: 2181
+
+storm.zookeeper.servers:
+- "nimbus"
+
+nimbus.host: "nimbus"
+nimbus.childopts: "-Xmx1024m -Djava.net.preferIPv4Stack=true"
+
+ui.childopts: "-Xmx768m -Djava.net.preferIPv4Stack=true"
+
+supervisor.childopts: "-Djava.net.preferIPv4Stack=true"
+worker.childopts: "-Xmx768m -Djava.net.preferIPv4Stack=true"
+
+storm.local.dir: "/app/home"
+
+java.library.path: "/usr/local/lib"
+
+
+#nimbus.host: "localhost"
+
+#storm.local.dir: "/var/stormtmp"
+
+#java.library.path: "/usr/local/lib"
+
+#supervisor.slots.ports:
+
+#     - 6700
+
+#     - 6701
+
+#     - 6702
+
+#     - 6703
+
+#worker.childopts: "-Xmx768m"
+
+#nimbus.childopts: "-Xmx512m"
+
+#supervisor.childopts: "-Xmx256m"

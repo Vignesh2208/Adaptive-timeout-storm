@@ -1,0 +1,516 @@
+package backtype.storm.utils;
+
+/*import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Random;
+import java.util.Random;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.lang.Object;
+import java.util.ArrayList;
+import java.util.Set;
+import java.util.List;*/
+import java.util.*;
+import java.lang.*;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
+
+import backtype.storm.Constants;
+import backtype.storm.coordination.CoordinatedBolt;
+import backtype.storm.tuple.Values;
+import backtype.storm.task.TopologyContext;
+import backtype.storm.task.WorkerTopologyContext;
+import backtype.storm.task.GeneralTopologyContext;
+import backtype.storm.generated.GlobalStreamId;
+import backtype.storm.generated.Grouping;
+import backtype.storm.generated.StormTopology;
+import clojure.lang.RT;
+
+public class Queueing_model {
+	int timeout_period;	
+	
+	Map<Integer, String> Task_to_Component_map = new HashMap<Integer,String>();
+	Set<String> ComponentIds = new HashSet<String>();
+	Set<String> Temp_Component_streams = new HashSet<String>();
+	Map<GlobalStreamId,Grouping> Temp_map = new HashMap<GlobalStreamId,Grouping>();
+	List<String> longest_path = new ArrayList();
+	List<String> heaviest_path = new ArrayList();
+	List<String> top_sort_comp_ids = new ArrayList();
+	String mode;
+	
+	Map<String,List<String>> Component_to_Input_stream_list_map  = new HashMap<String,List<String>>();
+	Map<String,List<String>> Component_to_Output_stream_list_map = new HashMap<String,List<String>>();
+	
+	Map<String,ArrayList<ArrayList>> task_rate_map = new HashMap<String,ArrayList<ArrayList>>();
+	Map<String,ArrayList<ArrayList>> task_timestamp_map = new HashMap<String,ArrayList<ArrayList>>();
+	
+	public static class Node{
+		
+		String node_id;
+		ArrayList<String> out_neighbours;
+		ArrayList<String> in_neighbours;
+		float weight;
+		float heaviest_path;
+		int len_longest_path;
+		String prev_node;
+		
+		public Node(String node_id){
+			node_id = node_id;
+			weight = (float)1.0;
+			len_longest_path = 0;
+			heaviest_path = (float) 0.0;
+			prev_node = "";
+			out_neighbours = new ArrayList<String>();
+			in_neighbours = new ArrayList<String>();
+		}
+		
+				
+		public void add_in_neighbour(String in_neighbour){
+			this.in_neighbours.add(in_neighbour);
+			
+		}
+		
+		public void add_out_neighbour(String out_neighbour){
+			this.out_neighbours.add(out_neighbour);
+		}
+		
+		public void set_weight(float weight){
+			this.weight = weight;
+		}
+		
+		public void set_len_longest_path(int len){
+			this.len_longest_path = len;
+		}
+		
+		public void set_heaviest_path(float heaviest_path_weight){
+			this.heaviest_path = heaviest_path_weight;
+		}
+		public void set_prev_node_in_longest_path(String prev_node){
+			this.prev_node = prev_node;
+		}
+		
+	}
+	//Hashmap to store topology graph. Key is compoenetID	
+	HashMap<String, Node> graph = new HashMap<String, Node>();
+	
+	
+	
+
+	static void dfs(HashMap<String,Node> graph, Map<String,Integer> visited, List<String> res, String u) {
+	    visited.put(u,1);
+	    int i = 0;
+	    for (i = 0; i <  graph.get(u).out_neighbours.size(); i++){
+	      if (visited.get(graph.get(u).out_neighbours.get(i)) == 0)
+	        dfs(graph, visited, res, graph.get(u).out_neighbours.get(i));
+	    }
+	    res.add(u);
+	}
+
+	 public static List<String> topologicalSort(HashMap<String,Node> graph) {
+	    int no_of_nodes = 0;
+	    Map<String,Integer> visited = new HashMap<String,Integer>();
+	    List<String> res = new ArrayList();
+		    
+		    
+	    for (Map.Entry<String,Node> entry : graph.entrySet())
+		{
+		    visited.put(entry.getKey(),0);
+	    	no_of_nodes++;
+	    	
+		}
+		    
+	    for (Map.Entry<String,Node> entry : graph.entrySet())
+		{
+	    	if(visited.get(entry.getKey()) == 0)
+	    		dfs(graph,visited,res,entry.getKey());
+		    	
+		    	
+		}
+		    
+		    
+	    Collections.reverse(res);
+	    return res;
+	  }
+
+		  
+	
+	
+	
+	
+	public Queueing_model(TopologyContext context, String mode){
+		timeout_period = Constants.DEFAULT_TIMEOUT;
+		
+		Task_to_Component_map = context. getTaskToComponent();
+		ComponentIds = context.getComponentIds();
+		mode = mode;
+		
+		String streamId;
+		
+		for (String componentId : ComponentIds) {
+			List<String> input_stream_list = new ArrayList<String>();
+			List<String> output_stream_list = new ArrayList<String>();
+		    Temp_map = context.getSources(componentId);
+		    Temp_Component_streams = context.getComponentStreams(componentId);
+		    
+		    for (Map.Entry<GlobalStreamId,Grouping> entry : Temp_map.entrySet())
+			{
+			    streamId = entry.getKey().toString();
+		    	input_stream_list.add(streamId);
+		    	
+			}
+		    
+		    for (String declared_stream_id : Temp_Component_streams) {
+		    	GlobalStreamId g_id = new GlobalStreamId(componentId,declared_stream_id);
+		        output_stream_list.add(g_id.toString());
+		    }
+		    
+		    Component_to_Input_stream_list_map.put(componentId,input_stream_list);
+		    Component_to_Output_stream_list_map.put(componentId,output_stream_list);
+		    //System.out.println("Component Id : " + componentId + " Input list : " + Component_to_Input_stream_list_map.get(componentId) + " Output list : " +  Component_to_Output_stream_list_map.get(componentId));
+		}
+		build_graph();
+		
+		
+		
+	}
+	
+	public int is_connected (List<String> in_stream, List<String> out_stream){
+		
+		int i,j;
+		for( i = 0; i < in_stream.size(); i++){
+			for(j = 0; j < out_stream.size(); j++){
+				if(in_stream.get(i).equals(out_stream.get(j))){
+					return 1;
+				}
+			}
+		}
+		return 0;
+	}
+	
+	public void build_graph(){
+		
+		int edge_exists_i_to_j = 0;
+		for (String componentId : ComponentIds) {
+			Node u = new Node(componentId);
+			graph.put(componentId,u);
+		}
+		
+		for(String i : ComponentIds){			
+			for (String j : ComponentIds) {
+				edge_exists_i_to_j = 0;
+				if(!i.equals(j)){
+					edge_exists_i_to_j = is_connected(Component_to_Input_stream_list_map.get(j),Component_to_Output_stream_list_map.get(i));
+					if(edge_exists_i_to_j == 1){
+						graph.get(i).add_out_neighbour(j);
+						graph.get(j).add_in_neighbour(i);
+					}
+					
+					
+				}
+				
+			}
+			
+		}
+		
+		
+		for(String i : ComponentIds){			
+			//System.out.println("Node id : " + i + " Out neighbours : " + graph.get(i).out_neighbours + " In neigbours : " + graph.get(i).in_neighbours);
+		}
+		top_sort_comp_ids = topologicalSort(graph);
+		
+		//find_longest_path();
+		
+		
+		
+	}
+	
+	public void find_longest_path(){
+		
+		 
+		
+		
+		//System.out.println("Topologically sorted order = " + top_sort_comp_ids);
+		int max = 0;
+		int max_len_value = -1;
+		String sink_in_llp = "";
+		for(int i = 0 ; i < top_sort_comp_ids.size(); i++){
+			String comp_id = top_sort_comp_ids.get(i);
+			String prev_node = "";
+			max = -1;
+			for(int j = 0; j < graph.get(comp_id).in_neighbours.size(); j++){
+				String in_neighbour = graph.get(comp_id).in_neighbours.get(j);
+				if(graph.get(in_neighbour).len_longest_path > max){
+					max = graph.get(in_neighbour).len_longest_path;
+					prev_node = in_neighbour;
+					
+				}
+			}
+			if(max != -1){
+				graph.get(comp_id).set_len_longest_path(max + 1);
+				graph.get(comp_id).set_prev_node_in_longest_path(prev_node);
+				
+			}
+			
+			if(graph.get(comp_id).len_longest_path > max_len_value){
+				max_len_value = graph.get(comp_id).len_longest_path;
+				sink_in_llp = comp_id;
+			}
+			
+			
+		}// end of for
+		
+		while(!sink_in_llp.isEmpty()){
+			longest_path.add(sink_in_llp);
+			sink_in_llp = graph.get(sink_in_llp).prev_node;
+		}
+		Collections.reverse(longest_path);
+		//System.out.println("Computed longest path = " + longest_path);
+		
+		
+	}
+	
+	
+	// // Called by acker once it receives a tick tuple. The task rate map is set. 
+	// //Task rate map : keys : Task-Id, Values : Arraylist of lambda-mu lists
+	// public void set_task_rate_map(HashMap<String,ArrayList<ArrayList>> task_rate){
+	// 	task_rate_map = task_rate;
+	// 	String task_Id;
+	// 	//System.out.println("In set task rate map");
+	// 	if(task_rate_map != null){
+	// 	for (Map.Entry<String,ArrayList<ArrayList>> entry : task_rate_map.entrySet())
+	// 	{
+	// 	    task_Id = entry.getKey();
+	//     	System.out.println("Task rate map : Task Id = " + task_Id + " Lambda-mu-List = " + entry.getValue());
+	    	
+	// 	}
+	// 	}
+	    
+		
+	// }
+	
+	// // Called by acker to set the task timestamp map. Task timestamp map contains a list of (tuple-id, process-start-time-ns,process-finish-time-ns) triplets which are all Long types
+	// // Task timestamp map can be used to fit the process time distribution as well as network latency distribution. The keys are Task-Ids
+	// public void set_task_timestamp_map(HashMap<String,ArrayList<ArrayList>> task_timestamp){
+	// 	task_timestamp_map = task_timestamp;
+	// 	String task_Id;
+	// 	//System.out.println("In set task rate map");
+	// 	if(task_timestamp_map != null){
+	// 	for (Map.Entry<String,ArrayList<ArrayList>> entry : task_timestamp_map.entrySet())
+	// 	{
+	// 	    task_Id = entry.getKey();
+	//         //System.out.println("Task timestamp map : Task Id = " + task_Id + " tuple-Id-Start-time-Stop-time list = " + entry.getValue());
+	    	
+	// 	}
+	// 	}
+	    
+		
+	// }
+	
+	
+	// Called only at the acker when it receives a tick tuple. Tick tuple period = timeout recomputation period
+	// Should Return the computed timeout value based on the queue model
+	public int on_Tick_tuple(HashMap<String,ArrayList<ArrayList>> task_rate){
+		// Do the timeout computation here with the task rate map and the longest path/heaviest_path and Task to component map.
+		//TODO
+		// HashMap<String,Float> Comp_id_to_weight = new HashMap<String,Float>();
+		
+		// //System.out.println("At acker. Called on_Tick_Tuple");
+		// int i = 0;
+		// float avg_lambda = (float)0.0;
+		// int no_of_entries = 0;
+		// for (String componentId : ComponentIds) {
+		// 	Comp_id_to_weight.put(componentId,(float)0.0);
+		// }
+		// //System.out.println("At acker. Reached here..");
+		// if(task_rate_map != null){
+		// for (Map.Entry<String,ArrayList<ArrayList>> entry : task_rate_map.entrySet())
+		// {
+		// 	//System.out.println("At acker. Entered for loop");
+		// 	no_of_entries = 0;
+		// 	avg_lambda = (float)0.0;
+		// 	for(i=0; i<entry.getValue().size(); i++ ){
+		// 		List<Float> lambda_mu_tuple = new ArrayList();
+		// 		lambda_mu_tuple = entry.getValue().get(i);
+		// 		//System.out.println("At acker. lambda-mu-tuple = " + lambda_mu_tuple + " " + lambda_mu_tuple.get(0));
+		// 		avg_lambda = avg_lambda + lambda_mu_tuple.get(0);
+		// 		//System.out.println("At acker. In here...");
+		// 		no_of_entries++;
+		// 	}
+		// 	avg_lambda = avg_lambda/(no_of_entries);
+		// 	//System.out.println("Avg_lambda = " + avg_lambda);
+		// 	String comp_id = Task_to_Component_map.get(Integer.parseInt(entry.getKey()));
+		// 	if(comp_id != null && !comp_id.isEmpty()){
+		// 		Comp_id_to_weight.put(comp_id,Comp_id_to_weight.get(comp_id) + avg_lambda);
+		// 	}
+			
+		    
+	    	
+	    	
+		// }
+		// 	set_node_weights(Comp_id_to_weight);
+		// 	find_heaviest_weighted_path();
+		// 	// Use task timestamp map, task rate map, heaviest_path/longest_path and Task_to_Component_map for required purposes here
+			
+			
+			
+			
+			
+			
+		// }
+		// else{
+		// 	//System.out.println("Task rate map is null");
+		// }
+		
+		// //System.out.println("Finished on Tick tuple");
+		// return 100; //Default timeout value 
+
+
+/* M/M/1 queue model	*/
+/*		
+		task_rate_map = task_rate;
+		int task_Id;
+		List<Float> lambda_mu_tuple = new ArrayList();
+		float lambda;
+		float mu;
+		float sojourn_percentile;
+		//System.out.println("In on Tick tuple");
+		if(task_rate_map != null){
+		for (Map.Entry<String,ArrayList<ArrayList>> entry : task_rate_map.entrySet())
+		{
+		    task_Id = Integer.parseInt(entry.getKey());
+			lambda_mu_tuple = entry.getValue().get(0);
+			lambda = lambda_mu_tuple.get(0);
+			mu = lambda_mu_tuple.get(1);
+			if(mu <= lambda)
+				return Constants.MAX_TIMEOUT;
+			sojourn_percentile = (float) Math.log(1/(1-Constants.TIMEOUT_PERCENTILE ))/(mu - lambda);
+			if(sojourn_percentile >= Constants.MAX_TIMEOUT)
+				return Constants.MAX_TIMEOUT;
+			graph.get(Task_to_Component_map.get(task_Id)).set_weight(Math.max(sojourn_percentile, graph.get(Task_to_Component_map.get(task_Id)).weight));
+	    //	System.out.println("Task rate map : Task Id = " + task_Id + " Lambda-mu-List = " + entry.getValue());	
+		}
+		}
+		
+		find_heaviest_weighted_path();
+		if(timeout_period < 1)
+			timeout_period = 1;
+		if(timeout_period > Constants.MAX_TIMEOUT)
+			timeout_period = Constants.MAX_TIMEOUT;
+		return timeout_period;
+*/		
+		/*The G/G/1 model*/
+//		task_rate_map = task_rate;
+//		int task_Id;
+//		List<Float> lambda_mu_tuple = new ArrayList<Float>();
+//		float queuing_delay;
+//		float inter_arrival_time;
+//		String arrival_file;
+//		String queue_file;
+//		//System.out.println("In on Tick tuple");
+//		if(task_rate_map != null){
+//		for (Map.Entry<String,ArrayList<ArrayList>> entry : task_rate_map.entrySet())
+//		{
+//		    task_Id = Integer.parseInt(entry.getKey());
+//			lambda_mu_tuple = entry.getValue().get(0);
+//			queuing_delay = lambda_mu_tuple.get(2);
+//			inter_arrival_time = lambda_mu_tuple.get(3);
+//			
+//			queue_file = Constants.TIMEOUT_FILE_BASE_DIR + "queue/" + task_Id + "_queue.txt";
+//			arrival_file = Constants.TIMEOUT_FILE_BASE_DIR + "queue/" + task_Id + "_arrival.txt";
+//			
+//    		try {
+// 	        	File file = new File(queue_file);
+// 	        	file.getParentFile().mkdirs(); 
+// 	        	PrintWriter out = new PrintWriter(new BufferedWriter(new FileWriter(file, true)));//append = true 
+// 	        	out.println(queuing_delay);
+// 	        	out.close();
+// 	    	} catch (IOException e) {
+// 	        
+// 	    	}
+//    		try {
+// 	        	File file = new File(arrival_file);
+// 	        	file.getParentFile().mkdirs(); 
+// 	        	PrintWriter out = new PrintWriter(new BufferedWriter(new FileWriter(file, true)));//append = true 
+// 	        	out.println(inter_arrival_time);
+// 	        	out.close();
+// 	    	} catch (IOException e) {
+// 	        
+// 	    	}
+//	    //	System.out.println("Task rate map : Task Id = " + task_Id + " Lambda-mu-List = " + entry.getValue());	
+//			
+//		}
+//		}
+//     	timeout_period = Constants.DEFAULT_TIMEOUT;
+//		return timeout_period;
+
+		String file_name_test = Constants.TIMEOUT_FILE_BASE_DIR + "test.txt";
+		
+		try {
+     	File file = new File(file_name_test);
+     	file.getParentFile().mkdirs(); 
+     	PrintWriter out = new PrintWriter(new BufferedWriter(new FileWriter(file, true)));//append = true 
+     	out.println(0);
+     	out.close();
+		} catch (IOException e) {
+     
+		}
+		return 30;
+	}
+	
+	
+	// public void set_node_weights(HashMap<String,Float> Comp_id_to_weight){
+	// 	for (String componentId : ComponentIds) {
+			
+	// 		graph.get(componentId).set_weight(Comp_id_to_weight.get(componentId));
+	// 		graph.get(componentId).set_heaviest_path(Comp_id_to_weight.get(componentId));
+	// 	}
+	// }
+	
+	public void find_heaviest_weighted_path(){
+		
+		
+				float max = (float)0.0;
+				float max_wt_value = (float)-1.0;
+				String sink_in_hp = "";
+				for(int i = 0 ; i < top_sort_comp_ids.size(); i++){
+					String comp_id = top_sort_comp_ids.get(i);
+					String prev_node = "";
+					max = (float)-1.0;
+					for(int j = 0; j < graph.get(comp_id).in_neighbours.size(); j++){
+						String in_neighbour = graph.get(comp_id).in_neighbours.get(j);
+						if( graph.get(in_neighbour).heaviest_path > max){
+							max = graph.get(in_neighbour).heaviest_path;
+							prev_node = in_neighbour;
+							
+						}
+					}
+					if(max != (float)-1.0){
+						graph.get(comp_id).set_heaviest_path(graph.get(comp_id).weight + max + (float)1.0 + Constants.NETWORK_DELAY);
+						graph.get(comp_id).set_prev_node_in_longest_path(prev_node);
+						
+					}
+					
+					if(graph.get(comp_id).heaviest_path > max_wt_value){
+						max_wt_value = graph.get(comp_id).heaviest_path;
+						sink_in_hp = comp_id;
+					}
+					
+					
+				}// end of for
+
+				timeout_period = (int) max_wt_value;
+
+				heaviest_path = new ArrayList();
+				while(!sink_in_hp.isEmpty()){
+					heaviest_path.add(sink_in_hp);
+					sink_in_hp = graph.get(sink_in_hp).prev_node;
+				}
+				Collections.reverse(heaviest_path);
+				//System.out.println("Computed heaviest weighted path = " + heaviest_path);	
+	}
+	
+	
+}

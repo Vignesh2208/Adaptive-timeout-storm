@@ -1,0 +1,370 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package storm.starter.spout;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Random;
+import java.util.concurrent.LinkedBlockingQueue;
+
+import twitter4j.FilterQuery;
+import twitter4j.StallWarning;
+import twitter4j.Status;
+import twitter4j.StatusDeletionNotice;
+import twitter4j.StatusListener;
+import twitter4j.TwitterStream;
+import twitter4j.TwitterStreamFactory;
+import twitter4j.auth.AccessToken;
+import twitter4j.conf.ConfigurationBuilder;
+import backtype.storm.Config;
+import backtype.storm.Constants;
+import backtype.storm.spout.SpoutOutputCollector;
+import backtype.storm.task.TopologyContext;
+import backtype.storm.topology.OutputFieldsDeclarer;
+import backtype.storm.topology.base.BaseRichSpout;
+import backtype.storm.tuple.Fields;
+import backtype.storm.tuple.Values;
+import backtype.storm.utils.Utils;
+import java.lang.Process;
+
+@SuppressWarnings("serial")
+public class TwitterSampleSpout extends BaseRichSpout {
+
+	SpoutOutputCollector _collector;
+	LinkedBlockingQueue<Status> queue = null;
+	TwitterStream twitterStream;
+	String consumerKey;
+	String consumerSecret;
+	String accessToken;
+	String accessTokenSecret;
+	String[] keyWords;
+	String prev_text = "default";
+	int no_of_acks = 0;
+	int no_of_fails = 0;
+	int no_of_emitted_tuples = 0;
+	Random _rand;
+	String _latencyPath;
+	String _total_latencyPath;
+	String Statistics_file_path;
+	String ratePath;
+	String _timeOutPath;
+	String _pythonScript;
+	double latency;
+	int tickTupleNo;
+	
+	Map<String, Long> _startTime = new HashMap<String, Long>(); //Stores the emit time of tuple
+	Map<String, Long> _total_Time = new HashMap<String, Long>(); //Stores the emit time of tuple
+    Map<String, String> _value = new HashMap<String, String>(); //Stores the value of tuple
+	  
+	//float _currentTimeOut = (float) 30.0;	//Initial value of the time out is 30s	
+
+    int max_rate = 101; //no of tuples emitted in one call to next tuple
+    int min_rate  = 100;
+    int prev_rate = (max_rate-min_rate)/2;
+    double std_deviation =  0.5*(max_rate-min_rate);
+    
+    int rate = max_rate - min_rate + 1;
+	public TwitterSampleSpout(String consumerKey, String consumerSecret,
+			String accessToken, String accessTokenSecret, String[] keyWords,int max_rate,int min_rate) {
+		this.consumerKey = consumerKey;
+		this.consumerSecret = consumerSecret;
+		this.accessToken = accessToken;
+		this.accessTokenSecret = accessTokenSecret;
+		this.keyWords = keyWords;
+		this.max_rate = max_rate;
+		this.min_rate = min_rate;
+		
+	}
+
+	public TwitterSampleSpout() {
+		// TODO Auto-generated constructor stub
+	}
+
+	@Override
+	public void open(Map conf, TopologyContext context,
+			SpoutOutputCollector collector) {
+		
+		String new_keyword = new String(keyWords[0]);
+		new_keyword = new_keyword.replaceAll("\\s+","");
+		queue = new LinkedBlockingQueue<Status>(1000);
+		_collector = collector;
+		_rand = new Random();
+	    
+		
+		tickTupleNo = 0;
+	    
+	    
+	    _timeOutPath = Constants.TIMEOUT_FILE_BASE_DIR + context.getThisComponentId() + "-" + context.getThisTaskId() + ".txt";
+	    //_timeOutPath = Constants.TIMEOUT_FILE_BASE_DIR + context.getThisComponentId() + ".tmp";
+	    _pythonScript = Constants.TIMEOUT_FILE_BASE_DIR  + "timeout_compute.py";
+		_total_latencyPath = Constants.TIMEOUT_FILE_BASE_DIR + "max_rate_" + max_rate + "_min_rate_" + min_rate + "/" + context.getThisComponentId() + "_total_latency" +"_maxrate_" + max_rate + "_minrate_" + min_rate + new_keyword + ".txt";
+	    _latencyPath = Constants.TIMEOUT_FILE_BASE_DIR  + "max_rate_" + max_rate + "_min_rate_" + min_rate + "/" + context.getThisComponentId() + "_latency_" + "_maxrate_" + max_rate + "_minrate_" + min_rate +  new_keyword + ".txt";
+	    Statistics_file_path = Constants.TIMEOUT_FILE_BASE_DIR  + "max_rate_" + max_rate + "_min_rate_" + min_rate + "/"+ context.getThisComponentId() + "_statistics_" + "_maxrate_" + max_rate + "_minrate_" + min_rate +  new_keyword + ".txt";
+		
+	    try {
+	        File file = new File(_latencyPath + "." + tickTupleNo);
+	        file.getParentFile().mkdirs(); 
+	    	PrintWriter out = new PrintWriter(new BufferedWriter(new FileWriter(file, false)));
+	        out.println("#");
+	        out.close();
+	    } catch (IOException e) {
+	        
+	    }
+		StatusListener listener = new StatusListener() {
+
+			@Override
+			public void onStatus(Status status) {
+			
+				queue.offer(status);
+			}
+
+			@Override
+			public void onDeletionNotice(StatusDeletionNotice sdn) {
+			}
+
+			@Override
+			public void onTrackLimitationNotice(int i) {
+			}
+
+			@Override
+			public void onScrubGeo(long l, long l1) {
+			}
+
+			@Override
+			public void onException(Exception ex) {
+			}
+
+			@Override
+			public void onStallWarning(StallWarning arg0) {
+				// TODO Auto-generated method stub
+
+			}
+
+		};
+
+		twitterStream = new TwitterStreamFactory(
+				new ConfigurationBuilder().setJSONStoreEnabled(true).build())
+				.getInstance();
+
+		twitterStream.addListener(listener);
+		twitterStream.setOAuthConsumer(consumerKey, consumerSecret);
+		AccessToken token = new AccessToken(accessToken, accessTokenSecret);
+		twitterStream.setOAuthAccessToken(token);
+		
+		if (keyWords.length == 0) {
+
+			twitterStream.sample();
+		}
+
+		else {
+
+			FilterQuery query = new FilterQuery().track(keyWords);
+			twitterStream.filter(query);
+		}
+
+	}
+
+	@Override
+	public void nextTuple() {
+		Status ret = queue.poll();
+		 
+		prev_rate = (Math.abs(((int) Math.round(_rand.nextGaussian()*std_deviation + prev_rate)))%rate) + min_rate;
+		int no_emitted = 0;
+		if (ret == null) {
+			
+			while (no_emitted <= prev_rate){
+				Long time_stamp = System.nanoTime();
+			    Long hash = (long) time_stamp.hashCode();
+			   	_startTime.put(hash.toString() , time_stamp);
+			   	_value.put(hash.toString() ,prev_text);
+			    _collector.emit(new Values(prev_text), hash.toString());
+			    _total_Time.put(hash.toString() , time_stamp);
+			    no_emitted = no_emitted + 1;
+			    no_of_emitted_tuples ++;
+				}
+		} else {
+			while (no_emitted <= prev_rate){
+			Long time_stamp = System.nanoTime();
+		    Long hash = (long) time_stamp.hashCode();
+		   	_startTime.put(hash.toString() , time_stamp);
+		   	prev_text = ret.getText();
+		   	_value.put(hash.toString() ,ret.getText());
+		    _collector.emit(new Values(ret.getText()), hash.toString());
+		    _total_Time.put(hash.toString() , time_stamp);
+		    no_emitted = no_emitted + 1;
+		    no_of_emitted_tuples ++;
+			}
+		}
+		File statistics_file_ptr = new File(Statistics_file_path);
+        statistics_file_ptr.getParentFile().mkdirs(); //Created the necessary folders in case the parent directories are absent
+    	PrintWriter statistics_out_ptr;
+    	
+		try {
+			statistics_out_ptr = new PrintWriter(new BufferedWriter(new FileWriter(statistics_file_ptr, false)));
+			statistics_out_ptr.println("No of acks = " + no_of_acks); //logs in milli-seconds
+	        statistics_out_ptr.println("No of fails = " + no_of_fails); 
+	        statistics_out_ptr.println("No of emitted tuples = " + no_of_emitted_tuples); 
+	        statistics_out_ptr.close();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}// true for append
+        
+		Utils.sleep(50);
+	}
+
+	@Override
+	public void close() {
+		twitterStream.shutdown();
+	}
+
+	@Override
+	public Map<String, Object> getComponentConfiguration() {
+		Config ret = new Config();
+		ret.setMaxTaskParallelism(1);
+		return ret;
+	}
+
+	  @Override
+	  public void ack(Object id) {
+		  if(id.equals("timeout compute")){
+		  
+			  // Assuming Johnson's SU distribution
+			  System.out.println("Called python script to finish ...");
+			  try {
+				
+				  Runtime.getRuntime().exec("python " + _pythonScript + " " + _latencyPath + "." + tickTupleNo + " " + _timeOutPath + " " + max_rate + " " + min_rate);
+				//p.waitFor();
+				
+			} catch (IOException e) {
+				
+			}
+			tickTupleNo = tickTupleNo + 1;
+		    try {
+		        File file = new File(_latencyPath + "." + tickTupleNo);
+		        file.getParentFile().mkdirs(); 
+		    	PrintWriter out = new PrintWriter(new BufferedWriter(new FileWriter(file, false)));// true for append
+		        out.println("#"); 
+		        out.close();
+		    } catch (IOException e) {
+		        
+		    }
+
+	        return;
+		  }
+		  
+		  Long value = _startTime.get(id);
+		  if(value != null){
+			   _startTime.remove(id);
+			   if(_value.get(id) != null)
+				   no_of_acks++;
+				    try {
+				        File file = new File(_latencyPath + "." + tickTupleNo);
+				        file.getParentFile().mkdirs(); //Created the necessary folders in case the parent directories are absent
+				    	PrintWriter out = new PrintWriter(new BufferedWriter(new FileWriter(file, true)));// true for append
+				        out.println((System.nanoTime() - value)/Math.pow(10,6)); //logs in milli-seconds
+				        out.close();
+				        
+				        				        
+				        File statistics_file_ptr = new File(Statistics_file_path);
+				        statistics_file_ptr.getParentFile().mkdirs(); //Created the necessary folders in case the parent directories are absent
+				    	PrintWriter statistics_out_ptr = new PrintWriter(new BufferedWriter(new FileWriter(statistics_file_ptr, false)));// true for append
+				        statistics_out_ptr.println("No of acks = " + no_of_acks); //logs in milli-seconds
+				        statistics_out_ptr.println("No of fails = " + no_of_fails); 
+				        statistics_out_ptr.println("No of emitted tuples = " + no_of_emitted_tuples); 
+				        statistics_out_ptr.close();
+				        
+				        
+				        
+				    } catch (IOException e) {
+				        //exception handling left as an exercise for the reader
+				    	//e.printStackTrace();
+				    }
+				   _value.remove(id);
+		  }
+		  
+		  
+		  value = _total_Time.get(id);
+		  if(value != null){
+			  try {
+				  	File file_ptr = new File(_total_latencyPath);
+			        file_ptr.getParentFile().mkdirs(); //Created the necessary folders in case the parent directories are absent
+			    	PrintWriter out_ptr = new PrintWriter(new BufferedWriter(new FileWriter(file_ptr, true)));// true for append
+			        out_ptr.println((System.nanoTime() - value)/Math.pow(10,6)); //logs in milli-seconds
+			        out_ptr.close();
+				  
+			  } catch (IOException e) {
+			        //exception handling left as an exercise for the reader
+			    	//e.printStackTrace();
+			    }
+			  _total_Time.remove(id);
+		  }
+		  
+	  }
+
+	  @Override
+	  public void fail(Object id) {
+		  
+		  Long value = _startTime.get(id);
+		  String sentence = _value.get(id);
+		  if(value != null){
+			  if(sentence != null){
+				  no_of_fails++;
+				  Long time_stamp = System.nanoTime();
+				  try {
+				  	File file = new File(_latencyPath + "." + tickTupleNo);
+			        file.getParentFile().mkdirs(); //Created the necessary folders in case the parent directories are absent
+			    	PrintWriter out = new PrintWriter(new BufferedWriter(new FileWriter(file, true)));// true for append
+			        out.println((time_stamp - value)/Math.pow(10,6)); //logs in milli-seconds
+			        out.close();
+			        
+			        File statistics_file_ptr = new File(Statistics_file_path);
+			        statistics_file_ptr.getParentFile().mkdirs(); //Created the necessary folders in case the parent directories are absent
+			    	PrintWriter statistics_out_ptr = new PrintWriter(new BufferedWriter(new FileWriter(statistics_file_ptr, false)));// true for append
+			        statistics_out_ptr.println("No of acks = " + no_of_acks); //logs in milli-seconds
+			        statistics_out_ptr.println("No of fails = " + no_of_fails); 
+			        statistics_out_ptr.println("No of emitted tuples = " + no_of_emitted_tuples); 
+			        statistics_out_ptr.close();
+				  }
+			        catch (IOException e) {
+				        //exception handling left as an exercise for the reader
+				    	//e.printStackTrace();
+				    }
+				  //Long hash = (long) time_stamp.hashCode();
+				  _startTime.put((String) id, time_stamp);
+				  _value.put((String) id, sentence);
+				  _collector.emit(new Values(sentence), id); // emit back with the same id
+				  //_value.remove(id);
+			  }	
+			  //_startTime.remove(id);
+		  }
+		  
+	  }
+	@Override
+	public void declareOutputFields(OutputFieldsDeclarer declarer) {
+		
+		declarer.declare(new Fields("word"));
+	}
+
+}
