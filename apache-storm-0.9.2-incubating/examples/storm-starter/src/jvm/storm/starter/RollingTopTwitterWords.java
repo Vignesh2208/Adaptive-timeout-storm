@@ -82,8 +82,13 @@ public class RollingTopTwitterWords {
     int enable_adaptive_timeout = 1;
     int enable_fault_injector = 0;
     
+<<<<<<< HEAD
     String mode = "";
     String Adaptive_Timeout_mode = "END_TO_END";
+=======
+    //String Adaptive_Timeout_mode = "END_TO_END";
+    String Adaptive_Timeout_mode = "END_TO_END]";
+>>>>>>> 854d7d06dcd588c061b84a672ba9c90618170d40
     String topology_name = "Rolling_count_twitter_topology_";
     //String [] keywords = {""};
     //builder.setSpout("spout", new RandomSentenceSpout_latency(), 5);
@@ -96,6 +101,7 @@ public class RollingTopTwitterWords {
   	
   	
   		topology_info = "rate_" + Integer.parseInt(args[1]) + "_" + keywords[0];
+<<<<<<< HEAD
   		
   		mode = args[2];
   		if(mode.equals("MM1")){
@@ -120,6 +126,9 @@ public class RollingTopTwitterWords {
   				}
   			}
   		}
+=======
+  		enable_adaptive_timeout = Integer.parseInt(args[2]);
+>>>>>>> 854d7d06dcd588c061b84a672ba9c90618170d40
   		
   		if(args.length == 4){
   			sample_size = Integer.parseInt(args[3]);

@@ -74,7 +74,10 @@ public class JoinTwitterWordCount {
     String topology_info = "default-info";
     int enable_adaptive_timeout = 1;
     int enable_fault_injector = 0;
+<<<<<<< HEAD
     String mode = "";
+=======
+>>>>>>> 854d7d06dcd588c061b84a672ba9c90618170d40
     
     //String Adaptive_Timeout_mode = "END_TO_END";
     String Adaptive_Timeout_mode = "QUEUEING MODEL Heavy traffic";
@@ -89,6 +92,7 @@ public class JoinTwitterWordCount {
   	
   	
   		topology_info = "rate_" + Integer.parseInt(args[1]) + "_" + keywords[0];
+<<<<<<< HEAD
   		
 
   		mode = args[2];
@@ -114,6 +118,9 @@ public class JoinTwitterWordCount {
   				}
   			}
   		}
+=======
+  		enable_adaptive_timeout = Integer.parseInt(args[2]);
+>>>>>>> 854d7d06dcd588c061b84a672ba9c90618170d40
   		
   		if(args.length == 4){
   			sample_size = Integer.parseInt(args[3]);

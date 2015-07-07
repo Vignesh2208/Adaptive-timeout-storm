@@ -43,6 +43,7 @@ sudo ./autogen.sh
 sudo ./configure
 sudo make
 sudo make install
+<<<<<<< HEAD
 sudo ldconfig
 
 Install numpy and scipy :
@@ -52,11 +53,17 @@ sudo apt-get install python-numpy python-scipy
 sudo mkdir -p /app/home/storm
 sudo mkdir -p /app/storm
 
+=======
+>>>>>>> 854d7d06dcd588c061b84a672ba9c90618170d40
 
 Install storm distribution (in each machine):
 ---------------------------------------------
 
+<<<<<<< HEAD
 Create dedicated storm user : (optional)
+=======
+Create dedicated storm user :
+>>>>>>> 854d7d06dcd588c061b84a672ba9c90618170d40
 
 sudo groupadd -g 53001 storm
 sudo mkdir -p /app/home/storm
