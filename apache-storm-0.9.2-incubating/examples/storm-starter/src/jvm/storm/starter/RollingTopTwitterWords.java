@@ -78,43 +78,57 @@ public class RollingTopTwitterWords {
     String [] keywords = {"Germanwings"};
     int rate = 10;
     int sample_size = 0;
-    String topology_info = "default-info";
+    
     int enable_adaptive_timeout = 1;
     int enable_fault_injector = 0;
     
     String mode = "";
     String Adaptive_Timeout_mode = "END_TO_END";
-    String topology_name = "Rolling_count_twitter_topology_";
-    //String [] keywords = {""};
-    //builder.setSpout("spout", new RandomSentenceSpout_latency(), 5);
-
+    String topology_name = "Rolling_count_twitter_topology";
+    int Tick_tuple_freq = 15;
+    int iteration_no = 1;
+    String topology_info = "default-info_" + "rate_" + rate + "_iteration_no_" + iteration_no;
+    int alt_rate = 0; // 0 - disabled. Otherwise, spout alternates between rate and alt_rate every 2 minutes.
     
     if(args.length >= 3){  	  
+    	
+    	// specified rate is of the form <rate>_<iteration_no> - this has to be split.
+        String[] parts = args[1].split("_");
+        rate = Integer.parseInt(parts[0]);
+        iteration_no = Integer.parseInt(parts[1]);
+        
+        //alt_rate = rate + 5; // Uncomment this line to make rate alternate
   	  
-  	builder.setSpout("spout", new TwitterSampleSpout("TU5xcNbuL4ydKqeGTOPATIe8V","lS3EkYEGT75BWewVws9h4naqsSHWYYOcY2kDMsqnFj5fT6MwRQ","2477902411-hZPgikH7ulbVZaQo7zhk7aKqnW9QZWkr2z9uFqg","plLGbufU0DjS1NAFEXgGgfhIlRdUUQtlvw6wc4BGtCf9S",keywords,Integer.parseInt(args[1]),0),1);
-  		
-  	
-  	
-  		topology_info = "rate_" + Integer.parseInt(args[1]) + "_" + keywords[0];
+        builder.setSpout("spout", new TwitterSampleSpout("TU5xcNbuL4ydKqeGTOPATIe8V","lS3EkYEGT75BWewVws9h4naqsSHWYYOcY2kDMsqnFj5fT6MwRQ","2477902411-hZPgikH7ulbVZaQo7zhk7aKqnW9QZWkr2z9uFqg","plLGbufU0DjS1NAFEXgGgfhIlRdUUQtlvw6wc4BGtCf9S",keywords,rate,alt_rate),1);
+  		 	
+        topology_info = "rate_" + rate + "_iteration_no_" + iteration_no + "_" + keywords[0];
+        
+        if(alt_rate != 0){
+  			topology_info += "_alternating";
+  		}
   		
   		mode = args[2];
   		if(mode.equals("MM1")){
   			enable_adaptive_timeout = 1;
   			Adaptive_Timeout_mode = "QUEUEING MODEL MM1";
+  			Tick_tuple_freq = 15;
   			
   		}
   		else{
   			if(mode.equals("HT")){
   				enable_adaptive_timeout = 1;
   				Adaptive_Timeout_mode = "QUEUEING MODEL Heavy Traffic";
+  				Tick_tuple_freq = 15;
   			
   			}
   			else{
   				if(mode.equals("END_TO_END")){
   					enable_adaptive_timeout = 1;
   	  				Adaptive_Timeout_mode = "END_TO_END";
+  	  				Tick_tuple_freq = 15;
   				}
   				else{
+  					Tick_tuple_freq = Integer.parseInt(mode.replaceAll("[^0-9]", ""));
   					enable_adaptive_timeout = 0;
   	  				Adaptive_Timeout_mode = "NORMAL";
   				}
@@ -127,16 +141,17 @@ public class RollingTopTwitterWords {
   		}
   		if(enable_adaptive_timeout == 1){
   			topology_info = topology_info + "_adaptive_timeout_enabled" + "_sample_size_" + sample_size;
-  			topology_name = topology_name + Adaptive_Timeout_mode;
+  			topology_name = topology_name + "_" + mode;
   		}
   		else{
   			topology_info = topology_info + "_adaptive_timeout_disabled" + "_sample_size_" + sample_size;
-  			topology_name = topology_name + " NORMAL";
+  			topology_name = topology_name + "_" + mode;
+  			
   		}
     }else{
     
     
-    builder.setSpout("spout", new TwitterSampleSpout("TU5xcNbuL4ydKqeGTOPATIe8V","lS3EkYEGT75BWewVws9h4naqsSHWYYOcY2kDMsqnFj5fT6MwRQ","2477902411-hZPgikH7ulbVZaQo7zhk7aKqnW9QZWkr2z9uFqg","plLGbufU0DjS1NAFEXgGgfhIlRdUUQtlvw6wc4BGtCf9S",keywords,rate,0), 1);
+    builder.setSpout("spout", new TwitterSampleSpout("TU5xcNbuL4ydKqeGTOPATIe8V","lS3EkYEGT75BWewVws9h4naqsSHWYYOcY2kDMsqnFj5fT6MwRQ","2477902411-hZPgikH7ulbVZaQo7zhk7aKqnW9QZWkr2z9uFqg","plLGbufU0DjS1NAFEXgGgfhIlRdUUQtlvw6wc4BGtCf9S",keywords,rate,alt_rate), 1);
     }
 
     builder.setBolt("split", new SplitSentence(), 8).shuffleGrouping("spout");
@@ -145,25 +160,25 @@ public class RollingTopTwitterWords {
     builder.setBolt("totalRanker", new TotalRankingsBolt(TOP_N)).globalGrouping("intermediateRanker");
     
     Config conf = new Config();
-    //conf.put(Config.TOPOLOGY_ENABLE_MESSAGE_TIMEOUTS, true);
-    conf.put(Config.TOPOLOGY_MESSAGE_TIMEOUT_SECS, 15);
-    //conf.put(Config.TOPOLOGY_TICK_TUPLE_FREQ_SECS, 30);
-    conf.setDebug(false);
+    conf.put(Config.TOPOLOGY_MESSAGE_TIMEOUT_SECS, Tick_tuple_freq);
+    conf.setDebugPrintEnabled(false);
+    conf.setDebugLogEnabled(true);
+    
 
     if(enable_adaptive_timeout == 1){
     	
     	conf.EnableAdaptiveTimeout();
-    	conf.SetAdaptiveTimeoutMode(Adaptive_Timeout_mode);
+    	conf.SetTimeoutMode(Adaptive_Timeout_mode);
     }
     else{
-    	conf.EnableAdaptiveTimeout();
-    	conf.SetAdaptiveTimeoutMode("NORMAL");
+    	
+    	conf.SetTimeoutMode("NORMAL");
     }
     if(enable_fault_injector == 1){
     	conf.EnableFaultInjector(sample_size);
     }
-    conf.SetBaseDirName(topology_name);
-    conf.SetTopologySpecificInfo(topology_info);
+    
+    conf.SetTopologySpecificInfo(topology_name,topology_info);
     
 
     if (args != null && args.length > 0) {
@@ -177,7 +192,7 @@ public class RollingTopTwitterWords {
       LocalCluster cluster = new LocalCluster();
       cluster.submitTopology("rolling-count-twitter", conf, builder.createTopology());
 
-      Thread.sleep(130000);
+      Thread.sleep(60000);
 
       cluster.shutdown();
     }

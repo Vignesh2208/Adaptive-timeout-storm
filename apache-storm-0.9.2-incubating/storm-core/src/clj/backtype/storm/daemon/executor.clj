@@ -119,23 +119,23 @@
 (defn return-adaptive-timeout-mode [^Map conf]
   (if (is-adaptive-timeout-enabled conf)
    (.get conf Config/ADAPTIVE_TIMEOUT_MODE)
-   (str "None")
+   (str "NORMAL")
   )
   
 )
 
 (defn return-base-dir-name [^Map conf]
-  (if (is-adaptive-timeout-enabled conf)
+  (if (.containsKey conf Config/BASE_DIR_NAME)
     (.get conf Config/BASE_DIR_NAME)
-    (str "None")
+    (str "Default_Base_Directory")
   )
   
 )
 
 (defn return-topology-specific-info [^Map conf]
-  (if (is-adaptive-timeout-enabled conf)
+  (if (.containsKey conf Config/TOPOLOGY_SPECIFIC_INFO)
     (.get conf Config/TOPOLOGY_SPECIFIC_INFO)
-    (str "None")
+    (str "Default_Topology_Info")
   )
   
 )
@@ -330,6 +330,55 @@
          )        
 	
 )
+
+(defn is-fault-injector-enabled [^Map conf]
+  (if (.containsKey conf Config/FAULT_INJECTOR_ENABLED) 
+    (if (.get conf Config/FAULT_INJECTOR_ENABLED)
+      true
+      false
+    )
+    false
+  )
+)  
+
+
+(defn return-msg-drop-probability [^Map conf]
+  (if (is-fault-injector-enabled conf)
+   (.get conf Config/MSG_DROP_PROBABILITY)
+   (int 0)
+  )
+  
+)
+
+(defn should-it-be-dropped [msg-drop-probability ^Random rand]
+  (if (= msg-drop-probability (int 0))
+    (do
+      
+      false
+    )
+    (do
+          (let [rand-number-max (int msg-drop-probability)
+                gen-rand-number (.nextInt rand rand-number-max)
+                
+              ] 
+               
+               (if (not (= gen-rand-number (int (- rand-number-max 1))))
+                  (do
+                      
+                      false
+                   )
+                  (do
+                      
+                      true
+                  )
+               )
+          )
+   )
+  
+  )
+)
+
+
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -617,11 +666,21 @@
       (if (seq data-points)
         (task/send-unanchored task-data Constants/METRICS_STREAM_ID [task-info data-points]))))
 
-(defn setup-ticks! [worker executor-data]
+(defn setup-ticks! [worker executor-data task-ids timeout-map]
   (let [storm-conf (:storm-conf executor-data)
         tick-time-secs (storm-conf TOPOLOGY-TICK-TUPLE-FREQ-SECS)
         receive-queue (:receive-queue executor-data)
-        context (:worker-context executor-data)]
+        context (:worker-context executor-data)
+        
+        ]
+    
+    (fast-list-iter [task-id task-ids]
+       (if (= false (is-adaptive-timeout-enabled storm-conf))
+         (when tick-time-secs
+         (reset-timeout (.get timeout-map task-id) tick-time-secs)
+         )
+      )                      
+    )
     (when tick-time-secs
       (if (or (system-id? (:component-id executor-data))
               (and (not (storm-conf TOPOLOGY-ENABLE-MESSAGE-TIMEOUTS))
@@ -673,10 +732,7 @@
         task-ids (:task-ids executor-data)
         timeout-map (:timeout-map executor-data)
         
-        ;;;;
-        
-        
-        
+        ;;;;        
         ;; starting the batch-transfer->worker ensures that anything publishing to that queue 
         ;; doesn't block (because it's a single threaded queue and the caching/consumer started
         ;; trick isn't thread-safe)
@@ -684,7 +740,7 @@
         handlers (with-error-reaction report-error-and-die
                    (mk-threads executor-data task-datas))
         threads (concat handlers system-threads)]    
-    (setup-ticks! worker executor-data)
+    (setup-ticks! worker executor-data task-ids timeout-map)
     (set-debug-enabled (:storm-conf executor-data))
     (set-debug-log-enabled (:storm-conf executor-data))
     (init-log-files)
@@ -694,6 +750,7 @@
     (fast-list-iter [task-id task-ids]
        (debug-print (str "Setup timeout ticks for task " (str task-id)))
        (setup-timeout-ticks! worker (.get timeout-map task-id) executor-data task-id)
+                             
     )
 
     
@@ -834,6 +891,7 @@
         stop-timestamp (MutableObject. (long 0))  
         queuing-delay (MutableObject. (long 0))
         inter-arrival-time (MutableObject. (long 0))
+        
         ;;;;;;
         
         
@@ -1005,7 +1063,7 @@
                       tasks-fn (:tasks-fn task-data)
                       
                       ;;;
-                      end-to-end (End_to_End. (str Constants/TIMEOUT_FILE_BASE_DIR) (str component-id) (str task-id) (str adaptive-timeout-base-dir) (str adaptive-timeout-topology-specific-info) (str adaptive-timeout-mode))
+                      end-to-end (End_to_End. (str Constants/TIMEOUT_FILE_BASE_DIR) (str component-id) (str task-id) (str adaptive-timeout-base-dir) (str adaptive-timeout-topology-specific-info) (str adaptive-timeout-mode) (.getObject is-debug-log-enabled))
 
                       ;;;
                       
@@ -1192,6 +1250,8 @@
         ^HashMap queuing-delay-start-map (:queuing-delay-start-map executor-data)
         queuing-delay (MutableObject. (long 0))
         inter-arrival-time (MutableObject. (long 0))
+        msg-drop-probability (return-msg-drop-probability (:storm-conf executor-data))
+        rand_2 (Random.)
         
         
         tuple-action-fn (fn [task-id ^TupleImpl tuple]
@@ -1297,13 +1357,19 @@
                                                                             (.updateAckVal a edge-id)
                                                                             (fast-list-iter [root-id root-ids]
                                                                                             (put-xor! anchors-to-ids root-id edge-id))
+                                                      
                                                                             ))))
+                                                      
+                                                      (if (not (should-it-be-dropped msg-drop-probability rand_2))
                                                       (transfer-fn t
                                                                    (TupleImpl. worker-context
                                                                                values
                                                                                task-id
                                                                                stream
-                                                                               (MessageId/makeId anchors-to-ids)))))
+                                                                               (MessageId/makeId anchors-to-ids)))
+                                                      )
+                                                      
+                                                      ))
                                     (or out-tasks [])))]]
           (builtin-metrics/register-all (:builtin-metrics task-data) storm-conf user-context)
           (if (= component-id Constants/SYSTEM_COMPONENT_ID)
@@ -1331,15 +1397,14 @@
                            (.setObject stop-timestamp (System/nanoTime))
                            (fast-map-iter [[root id] (.. tuple getMessageId getAnchorsToIds)]
                                           
-                                          
-                                            (task/send-unanchored task-data
-                                                                  ACKER-ACK-STREAM-ID
-                                                                  ;;[root (bit-xor id ack-val) (int (* (.getObject curr-lambda) 1000)) (int (*(.getObject curr-mu) 1000))]
-                                                                  [root (bit-xor id ack-val) (.getObject curr-lambda) (.getObject curr-mu) (.getObject start-timestamp) (.getObject stop-timestamp) (.getObject inter-arrival-time) (.getObject queuing-delay)]
-                                                                  ;;[root (bit-xor id ack-val) 0 0]
-                                                                  )
-                                          
-                                          
+                                          (if (not (should-it-be-dropped msg-drop-probability rand_2))
+                                           (task/send-unanchored task-data
+                                                                 ACKER-ACK-STREAM-ID
+                                                                 ;;[root (bit-xor id ack-val) (int (* (.getObject curr-lambda) 1000)) (int (*(.getObject curr-mu) 1000))]
+                                                                 [root (bit-xor id ack-val) (.getObject curr-lambda) (.getObject curr-mu) (.getObject start-timestamp) (.getObject stop-timestamp) (.getObject inter-arrival-time) (.getObject queuing-delay)]
+                                                                 ;;[root (bit-xor id ack-val) 0 0]
+                                                                 )                                          
+                                          )
                                           
                                           
                                           ))
@@ -1359,13 +1424,13 @@
                          (.setObject stop-timestamp (System/nanoTime))
                          (fast-list-iter [root (.. tuple getMessageId getAnchors)]
                                          
-                                         
-                                           (task/send-unanchored task-data
-                                                                 ACKER-FAIL-STREAM-ID
-                                                                 [root (.getObject curr-lambda) (.getObject curr-mu) (.getObject start-timestamp) (.getObject stop-timestamp) (.getObject inter-arrival-time) (.getObject queuing-delay)]
-                                                                 ;;[root 0 0]
-                                                                 )
-                                         
+                                         (if (not (should-it-be-dropped msg-drop-probability rand_2))
+                                          (task/send-unanchored task-data
+                                                                ACKER-FAIL-STREAM-ID
+                                                                [root (.getObject curr-lambda) (.getObject curr-mu) (.getObject start-timestamp) (.getObject stop-timestamp) (.getObject inter-arrival-time) (.getObject queuing-delay)]
+                                                                ;;[root 0 0]
+                                                                )
+                                         )
                                          
                                          
                                          )

@@ -58,6 +58,9 @@ public class Queueing_model {
 	List<String> heaviest_path = new ArrayList();
 	List<String> top_sort_comp_ids = new ArrayList();
 	String mode;
+	String Topology_name;
+	String Topology_info;
+	int Log_enabled;
 	
 	Map<String,List<String>> Component_to_Input_stream_list_map  = new HashMap<String,List<String>>();
 	Map<String,List<String>> Component_to_Output_stream_list_map = new HashMap<String,List<String>>();
@@ -166,12 +169,16 @@ public class Queueing_model {
 	/*
 	 * Constructor. Get list of input and output streams for each component. Build graph.
 	 */
-	public Queueing_model(TopologyContext context, String mode){
+	public Queueing_model(TopologyContext context, String Topology_name, String Topology_info,String mode,int Log_enabled){
 		
 		
 		Task_to_Component_map = context. getTaskToComponent();
 		ComponentIds = context.getComponentIds();
 		this.mode = mode;
+		this.Topology_info = Topology_info;
+		this.Topology_name = Topology_name;
+		this.Log_enabled = Log_enabled;
+		
 		this.mm1_timeout = Constants.MAX_TIMEOUT;
 		this.ht_timeout =  Constants.MAX_TIMEOUT;
 		
@@ -451,8 +458,9 @@ public class Queueing_model {
 		double total_timeout = 0.0;
 		int computed_timeout = 0;
 		String comp_id;
-		String file_path = Constants.TIMEOUT_FILE_BASE_DIR + "Service_Times/";
-		String inter_path = Constants.TIMEOUT_FILE_BASE_DIR + "Interarrival_Times/";
+		String file_path = Constants.TIMEOUT_FILE_BASE_DIR + Topology_name + "/" + Topology_info + "/" + "Service_Times/";
+		String inter_path = Constants.TIMEOUT_FILE_BASE_DIR + Topology_name + "/" + Topology_info + "/" + "Interarrival_Times/";
+		String timeout_file_path = Constants.TIMEOUT_FILE_BASE_DIR + Topology_name + "/" + Topology_info + "/" + "timeout_append.txt";
 		int i = 0;
 		float avg_lambda = (float)0.0;
 		int no_of_entries = 0;
@@ -516,10 +524,15 @@ public class Queueing_model {
 			    else{
 		    		max_timeout.put(comp_id,timeout);
 		    	}
-			    					/*	LOGGING SERVICE AND INTERARRIVAL TIMES TO SEPARATE FILES */
+			    
+			    
+			    
+			    
+			    /*	LOGGING SERVICE AND INTERARRIVAL TIMES TO SEPARATE FILES */
 			    /*
+			    if(Log_enabled > 0){
 			    try{
-		  			File statistics_file_ptr = new File(file_path + "Task_" + task_Id + "Service_times.txt");
+		  			File statistics_file_ptr = new File(file_path + "Task_" + task_Id + "_Service_times.txt");
 		  			statistics_file_ptr.getParentFile().mkdirs(); //Created the necessary folders in case the parent directories are absent
 		  			PrintWriter statistics_out_ptr = new PrintWriter(new BufferedWriter(new FileWriter(statistics_file_ptr, true)));// true for append
 		  			for(int i = 0; i < service_times.size(); i++){
@@ -532,7 +545,7 @@ public class Queueing_model {
 		  		}
 			    
 			    try{
-		  			File statistics_file_ptr = new File(inter_path + "Task_" + task_Id + "Interarrival_times.txt");
+		  			File statistics_file_ptr = new File(inter_path + "Task_" + task_Id + "_Interarrival_times.txt");
 		  			statistics_file_ptr.getParentFile().mkdirs(); //Created the necessary folders in case the parent directories are absent
 		  			PrintWriter statistics_out_ptr = new PrintWriter(new BufferedWriter(new FileWriter(statistics_file_ptr, true)));// true for append
 		  			for(int i = 0; i < interarrival_times.size(); i++){
@@ -543,8 +556,8 @@ public class Queueing_model {
 		  		}
 		  		catch (Exception e) {				        
 		  		}
+			    }
 			    */
-			    
 			    
 			    interarrival_times = new ArrayList<Long>();
 			    service_times = new ArrayList<Long>();
@@ -568,10 +581,13 @@ public class Queueing_model {
 		}
 		
 		computed_timeout = (int)Math.ceil(total_timeout/((double) Math.pow(10,9)));
-									/*  Logging timeout values	*/
-		/*
+		
+		
+		
+		/*  Logging timeout values	*/
+		if(Log_enabled > 0){
 		try{
-  			File statistics_file_ptr = new File(file_path + "timeout.append.txt");
+  			File statistics_file_ptr = new File(timeout_file_path);
   			statistics_file_ptr.getParentFile().mkdirs(); //Created the necessary folders in case the parent directories are absent
   			PrintWriter statistics_out_ptr = new PrintWriter(new BufferedWriter(new FileWriter(statistics_file_ptr, true)));// true for append
   			
@@ -582,7 +598,7 @@ public class Queueing_model {
   		}
   		catch (Exception e) {				        
   		}
-  		*/
+		}
   		
 		if (computed_timeout > 0 && computed_timeout < Constants.MAX_TIMEOUT)
 			return computed_timeout;

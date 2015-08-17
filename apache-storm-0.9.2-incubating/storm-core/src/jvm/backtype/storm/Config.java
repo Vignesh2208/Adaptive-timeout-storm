@@ -872,6 +872,15 @@ public class Config extends HashMap<String, Object> {
      */
     public static final String ISOLATION_SCHEDULER_MACHINES = "isolation.scheduler.machines";
     public static final Object ISOLATION_SCHEDULER_MACHINES_SCHEMA = Map.class;
+    
+    public static void init(Map conf){
+    	conf.put(Config.BASE_DIR_NAME,"default-topology");
+ 	   	conf.put(Config.TOPOLOGY_SPECIFIC_INFO,"default-info");
+    }
+    
+    public Config(){
+    	init(this);
+    }
 
     public static void setDebug(Map conf, boolean isOn) {
         conf.put(Config.TOPOLOGY_DEBUG, isOn);
@@ -932,22 +941,22 @@ public class Config extends HashMap<String, Object> {
    public static void EnableAdaptiveTimeout(Map conf){
 	   conf.put(Config.ADAPTIVE_TIMEOUT_ENABLED,true);
 	   conf.put(Config.ADAPTIVE_TIMEOUT_MODE,"END_TO_END");
-	   conf.put(Config.BASE_DIR_NAME,"default-topology");
-	   conf.put(Config.TOPOLOGY_SPECIFIC_INFO,"default-info");
+	   
    }
    
    public void EnableAdaptiveTimeout(){
 	   EnableAdaptiveTimeout(this);
    }
    
-   public static void SetAdaptiveTimeoutMode(Map conf,String mode){
+   public static void SetTimeoutMode(Map conf,String mode){
 	   conf.put(Config.ADAPTIVE_TIMEOUT_MODE,mode);
    }
    
-   public void SetAdaptiveTimeoutMode(String mode){
-	   SetAdaptiveTimeoutMode(this,mode);
+   public void SetTimeoutMode(String mode){
+	   SetTimeoutMode(this,mode);
    }
 
+   /*
    public static void SetBaseDirName(Map conf,String name){
 	   conf.put(Config.BASE_DIR_NAME,name);
    }
@@ -955,13 +964,16 @@ public class Config extends HashMap<String, Object> {
    public void SetBaseDirName(String name){
 	   SetBaseDirName(this,name);
    }
-   
-   public static void SetTopologySpecificInfo(Map conf,String info){
+   */
+   public static void SetTopologySpecificInfo(Map conf,String name, String info){
+	   
+	   conf.put(Config.BASE_DIR_NAME,name);
 	   conf.put(Config.TOPOLOGY_SPECIFIC_INFO,info);
    }
    
-   public void SetTopologySpecificInfo(String info){
-	   SetTopologySpecificInfo(this,info);
+   public void SetTopologySpecificInfo(String name, String info){
+	   
+	   SetTopologySpecificInfo(this,name,info);
    }
    
    public static void EnableFaultInjector(Map conf,int sample_size){

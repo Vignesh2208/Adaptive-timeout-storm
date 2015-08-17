@@ -64,10 +64,17 @@ public class TwitterSampleSpout extends BaseRichSpout {
 	
 	
    Map<String, String> _value = new HashMap<String, String>(); //Stores the value of tuple for later re-transmission
+   
    int rate  = 10;
+   int alt_rate = 0;
+   int orig_rate = 0;
+   long start_window_time = 0;
+   long end_window_time = 0;
+   long window_size = 120; // alternating time period betn rate and alt_rate. currently set to 120 sec - 2 mins.
+   
    
    public TwitterSampleSpout(String consumerKey, String consumerSecret,
-			String accessToken, String accessTokenSecret, String[] keyWords,int rate, int def_arg) {
+			String accessToken, String accessTokenSecret, String[] keyWords,int rate, int alt_rate) {
 		
 		
 		this.consumerKey = consumerKey;
@@ -76,7 +83,8 @@ public class TwitterSampleSpout extends BaseRichSpout {
 		this.accessTokenSecret = accessTokenSecret;
 		this.keyWords = keyWords;
 		this.rate = rate;
-		
+		this.orig_rate = rate;
+		this.alt_rate = alt_rate;
 		
 	}
 
@@ -153,6 +161,25 @@ public class TwitterSampleSpout extends BaseRichSpout {
 	public void nextTuple() {
 		Status ret = queue.poll();
 		int no_emitted = 0;
+		
+		
+		
+		if(this.alt_rate != 0){
+			
+			if(start_window_time == 0){
+				start_window_time = System.currentTimeMillis()/1000;
+			}
+			
+			end_window_time =  System.currentTimeMillis()/1000;
+			if(end_window_time - start_window_time > window_size){ // alternate between orig_rate and alt_rate after every window_size seconds
+				orig_rate = rate;
+				rate = alt_rate;
+				alt_rate = orig_rate;
+				start_window_time = end_window_time;
+				
+			}
+			
+		}
 					
 		while (no_emitted <= rate){
 			
@@ -193,6 +220,7 @@ public class TwitterSampleSpout extends BaseRichSpout {
 	  @Override
 	  public void ack(Object id) {
 		  if(_value.get(id)!= null){
+			 
 			  _value.remove(id);
 		  }
 		

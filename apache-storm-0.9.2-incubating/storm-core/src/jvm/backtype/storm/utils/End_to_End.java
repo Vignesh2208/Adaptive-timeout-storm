@@ -56,15 +56,21 @@ public class End_to_End {
 	String log_file;
 	double latency;
 	int tickTupleNo;
+	int Log_enabled;
 	String mode;
 	
 	String _baseDir;
 	
 	Map<String, Long> _startTime = new HashMap<String, Long>(); //Stores the emit time of tuple
 	Map<String, Long> _total_Time = new HashMap<String, Long>(); //Stores the emit time of tuple
+	long start_window = 0;
+	long end_window = 0;
+	double avg_throughput = 0;
+	long n_acks_in_window = 0;
+	long n_units = 0;
 
     
-    public End_to_End(String TIMEOUT_BASE_DIR, String Component_ID, String Task_ID, String Topology_name, String Topology_info,String mode){
+    public End_to_End(String TIMEOUT_BASE_DIR, String Component_ID, String Task_ID, String Topology_name, String Topology_info,String mode,int Log_enabled){
     	
     	this.TIMEOUT_BASE_DIR = TIMEOUT_BASE_DIR;
     	this.Component_ID = Component_ID;
@@ -72,7 +78,7 @@ public class End_to_End {
     	this.Topology_info = Topology_info;
     	this.Task_ID = Task_ID;
     	this.mode = mode;
-    	
+    	this.Log_enabled = Log_enabled ;
     	this._baseDir = TIMEOUT_BASE_DIR + Topology_name + "/";
     	this._latencyPath = this._baseDir + Topology_info + "/" + Task_ID + "-" + Component_ID + "_latency_" + Topology_info + ".txt";
     	this._total_latencyPath = this._baseDir + Topology_info + "/" + Task_ID + "-" + Component_ID + "_total_latency_" + Topology_info + ".txt";
@@ -88,10 +94,10 @@ public class End_to_End {
     	 * TIMEOUT_BASE_DIR : (defined in Constants.java) /app/home/storm/
     	 * Base Dir : TIMEOUT_BASE_DIR/Topology_name/
     	 * temporary per tick tuple latency file :  TIMEOUT_BASE_DIR/Topology_name/Topology_info/<(Task_ID)-(Compnent_ID)_latency_(Topology_info)>.txt
-    	 * Statistics file :  TIMEOUT_BASE_DIR/Topology_name/Topology_info/<(Task_ID)-(Compnent_ID)_statistics_(Topology_info)>.txt
-    	 * Total latency file : (for experimental evalutation) 	: TIMEOUT_BASE_DIR/Topology_name/Topology_info/<(Task_ID)-(Compnent_ID)_total_latency_(Topology_info)>.txt
+    	 * Statistics file (created only if log enabled) :  TIMEOUT_BASE_DIR/Topology_name/Topology_info/<(Task_ID)-(Compnent_ID)_statistics_(Topology_info)>.txt
+    	 * Total latency file : (for experimental evalutation - (created only if log enabled)): TIMEOUT_BASE_DIR/Topology_name/Topology_info/<(Task_ID)-(Compnent_ID)_total_latency_(Topology_info)>.txt
     	 * Python script : TIMEOUT_BASE_DIR/timeout_compute.py
-    	 * Debug log files : TIMEOUT_BASE_DIR/log_tuple_action.txt ; TIMEOUT_BASE_DIR/log_spout_msg.txt ; TIMEOUT_BASE_DIR/log.txt ; TIMEOUT_BASE_DIR/log_acker_action.txt
+    	 * Debug log files (created only if log enabled) : TIMEOUT_BASE_DIR/log_tuple_action.txt ; TIMEOUT_BASE_DIR/log_spout_msg.txt ; TIMEOUT_BASE_DIR/log.txt ; TIMEOUT_BASE_DIR/log_acker_action.txt
     	 * Timeout value file : (contains appended timeout values for evaluation purposes ) : TIMEOUT_BASE_DIR/<(Component_ID)-(Task_ID)>.txt
     	 *  
     	 */
@@ -114,16 +120,14 @@ public class End_to_End {
      * Called by spout on each emit. The start time is noted if it is a new tuple.
      */
     public void on_emit(String hash){
-    	if(mode.equals("END_TO_END")|| mode.equals("NORMAL")||mode.startsWith("QUEUEING MODEL")){
+    	if(mode.equals("END_TO_END")|| ((mode.equals("NORMAL")||mode.startsWith("QUEUEING MODEL")) && Log_enabled == 1)){
+    		
     		Long time_stamp = System.nanoTime();
     		_startTime.put(hash, time_stamp);
     		if(_total_Time.get(hash) == null){
     			_total_Time.put(hash, time_stamp);
     		}
-    		else{
-    			//System.out.println("Time stamp already there = " + _total_Time.get(hash));
-    		}
-    	
+    		
 	    	no_of_emitted_tuples ++;
     	}
     	
@@ -131,7 +135,7 @@ public class End_to_End {
     
     //currently not called
     public void on_NextTuple(){
-    	if(mode.equals("END_TO_END") || mode.equals("NORMAL")|| mode.startsWith("QUEUEING MODEL")){
+    	if(mode.equals("END_TO_END") ||  ((mode.equals("NORMAL")||mode.startsWith("QUEUEING MODEL")) && Log_enabled == 1)){
     		int rem = no_of_emitted_tuples % 2;
     		File statistics_file_ptr = new File(Statistics_file_path + rem);
         	statistics_file_ptr.getParentFile().mkdirs(); //Created the necessary folders in case the parent directories are absent
@@ -154,13 +158,30 @@ public class End_to_End {
     
     public void on_Ack(Object id){
     	  
-		  if(mode.equals("END_TO_END") || mode.equals("NORMAL")||mode.startsWith("QUEUEING MODEL")){
+		  if(mode.equals("END_TO_END") ||  ((mode.equals("NORMAL")||mode.startsWith("QUEUEING MODEL")) && Log_enabled == 1)){
 			  
 			  Long value = _startTime.get(id);
 			  if(value != null){
 				  _startTime.remove(id);
 
 				  no_of_acks++;
+				  
+				  
+				  n_acks_in_window ++;				  
+				  if(start_window == 0){
+					  start_window = System.currentTimeMillis()/1000;
+				  }
+				  
+				  end_window = System.currentTimeMillis()/1000;				  
+				  if(end_window - start_window >= 1){
+					  			  		  
+					  avg_throughput = (avg_throughput*(n_units) + (n_acks_in_window)/(end_window - start_window))/(n_units + end_window - start_window);
+					  n_units += end_window - start_window;
+					  start_window = end_window;
+					  n_acks_in_window = 0; 
+					  
+				  }
+				  
 				  if(mode.equals("END_TO_END")){
 				    	try {
 				    		File file = new File(_latencyPath + "." + tickTupleNo);
@@ -175,8 +196,10 @@ public class End_to_End {
 				    	
 			  }
 		  }
-		 if(mode.equals("END_TO_END") || mode.equals("NORMAL")||mode.startsWith("QUEUEING MODEL")){
-			 int rem = no_of_emitted_tuples % 2;
+		 if(mode.equals("END_TO_END") ||  ((mode.equals("NORMAL")||mode.startsWith("QUEUEING MODEL")) && Log_enabled == 1)){
+			 		int rem = no_of_emitted_tuples % 2;
+			 
+			 		if(Log_enabled > 0){
 			    	try{
 			        	File statistics_file_ptr = new File(Statistics_file_path + rem);
 			        	statistics_file_ptr.getParentFile().mkdirs(); //Created the necessary folders in case the parent directories are absent
@@ -184,13 +207,11 @@ public class End_to_End {
 			        	statistics_out_ptr.println("No of acks = " + no_of_acks); //logs in milli-seconds
 			        	statistics_out_ptr.println("No of fails = " + no_of_fails); 
 			        	statistics_out_ptr.println("No of emitted tuples = " + no_of_emitted_tuples); 
+			        	statistics_out_ptr.println("Avg throughput = " + avg_throughput);
 			        	statistics_out_ptr.close();
-			    	} catch (Exception e) {
-				    	
-			    	}
-				        
-				        
-				    	
+			    	} catch (Exception e) {				    	
+			    	}				        
+			 		}				    	
 				    	
 			  	
 		  
@@ -255,14 +276,28 @@ public class End_to_End {
     public void on_Fail(Object id){
     	
     	 
-    	 if(mode.equals("END_TO_END") || mode.equals("NORMAL")||mode.startsWith("QUEUEING MODEL")){
-    		 int rem = no_of_emitted_tuples % 2;
+    	 if(mode.equals("END_TO_END") ||  ((mode.equals("NORMAL")||mode.startsWith("QUEUEING MODEL")) && Log_enabled == 1)){
+    		 
+    		int rem = no_of_emitted_tuples % 2;
     		Long value = _startTime.get(id);
+    		
     		
 		  	if(value != null){
 			  	
 				  	no_of_fails++;
 				  	Long time_stamp = System.nanoTime();
+				  	
+				  	end_window = System.currentTimeMillis()/1000;				  
+					if(end_window - start_window >= 1){
+						  			  		  
+						  avg_throughput = (avg_throughput*(n_units) + (n_acks_in_window)/(end_window - start_window))/(n_units + end_window - start_window);
+						  n_units += end_window - start_window;
+						  start_window = end_window;
+						  n_acks_in_window = 0; 
+						  
+					}
+				  	
+				  	
 				  	if(mode.equals("END_TO_END")){
 				  	try {
 				  		File file = new File(_latencyPath + "." + tickTupleNo);
@@ -274,7 +309,9 @@ public class End_to_End {
 					catch (Exception e) {				        
 		        	}
 				  	}
-				  	if(mode.equals("END_TO_END") || mode.equals("NORMAL")||mode.startsWith("QUEUEING MODEL")){ 
+				  	if(mode.equals("END_TO_END") || mode.equals("NORMAL")||mode.startsWith("QUEUEING MODEL")){
+				  		
+				  		if(Log_enabled > 0){
 				  		try{
 				  			File statistics_file_ptr = new File(Statistics_file_path + rem);
 				  			statistics_file_ptr.getParentFile().mkdirs(); //Created the necessary folders in case the parent directories are absent
@@ -282,13 +319,14 @@ public class End_to_End {
 				  			statistics_out_ptr.println("No of acks = " + no_of_acks); //logs in milli-seconds
 				  			statistics_out_ptr.println("No of fails = " + no_of_fails); 
 				  			statistics_out_ptr.println("No of emitted tuples = " + no_of_emitted_tuples); 
+				  			statistics_out_ptr.println("Avg throughput = " + avg_throughput);
 				  			statistics_out_ptr.close();
 				  		}
 				  		catch (Exception e) {				        
 				  		}
-				  	
+				  		}
 				  
-				  	_startTime.put((String) id, time_stamp);
+				  		_startTime.put((String) id, time_stamp);
 				
 				  	}			  
 			  		

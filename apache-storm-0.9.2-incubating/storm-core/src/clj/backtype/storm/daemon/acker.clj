@@ -99,10 +99,29 @@
 (defn obtain-adaptive-timeout-mode [^Map conf]
   (if (is-the-adaptive-timeout-enabled conf)
    (.get conf Config/ADAPTIVE_TIMEOUT_MODE)
-   (str "None")
+   (str "NORMAL")
   )
   
 )
+
+
+(defn return-base-dir-name [^Map conf]
+  (if (.containsKey conf Config/BASE_DIR_NAME)
+    (.get conf Config/BASE_DIR_NAME)
+    (str "Default_Base_Directory")
+  )
+  
+)
+
+(defn return-topology-specific-info [^Map conf]
+  (if (.containsKey conf Config/TOPOLOGY_SPECIFIC_INFO)
+    (.get conf Config/TOPOLOGY_SPECIFIC_INFO)
+    (str "Default_Topology_Info")
+  )
+  
+)
+
+
 
 (defn is-fault-injector-enabled [^Map conf]
   (if (.containsKey conf Config/FAULT_INJECTOR_ENABLED) 
@@ -237,6 +256,9 @@
         task-id  (MutableObject.(int 0))
         rand_2 (Random.)
         adaptive-timeout-mode (MutableObject.) 
+        topology-name (MutableObject.) 
+        topology-info (MutableObject.)
+        
         queuing-model (MutableObject.)
         timeout-value (MutableObject.(int 100))       
         ]
@@ -249,10 +271,12 @@
                ;;;  FAULT-INJECTOR
                (.setObject msg-drop-probability (return-msg-drop-probability storm-conf))
                (.setObject adaptive-timeout-mode (obtain-adaptive-timeout-mode storm-conf))
-               (.setObject queuing-model (Queueing_model. context (obtain-adaptive-timeout-mode storm-conf)))
+               (.setObject topology-name (return-base-dir-name storm-conf))
+               (.setObject topology-info (return-topology-specific-info storm-conf))
                (set-debug-enabled storm-conf)
                (set-debug-log-enabled storm-conf)
                (init-log-files)
+               (.setObject queuing-model (Queueing_model. context (.getObject topology-name) (.getObject topology-info) (obtain-adaptive-timeout-mode storm-conf) (.getObject is-debug-log-enabled) ))
                ;;;
                
                )
@@ -289,14 +313,14 @@
                      ;;;; else
                      (if (= (.getObject adaptive-timeout-mode) "END_TO_END")
                        (.setObject timeout-value (int 100))
-                       (.setObject timeout-value (int 30))
-                        
+                       ;;(.setObject timeout-value (int 30))                        
                      )
                      )
                      
-                       
+                      (if (not= (.getObject adaptive-timeout-mode) "NORMAL")                        
                       (with-open [w (clojure.java.io/writer (str Constants/TIMEOUT_FILE_BASE_DIR ACKER-COMPONENT-ID "-" (str (.getObject task-id)) ".txt"))]
                       (.write w (str (.getObject timeout-value))))
+                      )
                       
                       (reset-task-rate-map task-rate-map)
                       (reset-task-count-map task-count-map) 
